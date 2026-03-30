@@ -10,6 +10,11 @@ import type {
   CreateTaskInput,
   RegisterAgentInput,
   TaskFilter,
+  ApiKeyRecord,
+  BridgeRequestLogEntry,
+  BridgeRequestLogFilter,
+  BridgeState,
+  BridgeTunnel,
 } from '../types.js';
 
 interface TaskRow {
@@ -36,6 +41,35 @@ interface AgentRow {
   status: string;
 }
 
+interface ApiKeyRow {
+  id: string;
+  name: string;
+  key_hash: string;
+  key_prefix: string;
+  scopes: string;
+  expires_at: string | null;
+  last_used: string | null;
+  created_at: string;
+  revoked_at: string | null;
+}
+
+interface BridgeRequestRow {
+  id: number;
+  key_name: string;
+  method: string;
+  path: string;
+  ip: string;
+  status_code: number;
+  created_at: string;
+}
+
+interface BridgeStateRow {
+  paused: number;
+  public_url: string | null;
+  tunnel: string | null;
+  updated_at: string;
+}
+
 export class Store {
   private db: Database.Database;
 
@@ -47,6 +81,8 @@ export class Store {
   }
 
   private migrate(): void {
+    const now = new Date().toISOString();
+
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS tasks (
         id TEXT PRIMARY KEY,
@@ -75,7 +111,53 @@ export class Store {
       CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
       CREATE INDEX IF NOT EXISTS idx_tasks_priority ON tasks(priority);
       CREATE INDEX IF NOT EXISTS idx_tasks_claimed_by ON tasks(claimed_by);
+
+      CREATE TABLE IF NOT EXISTS api_keys (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        key_hash TEXT NOT NULL UNIQUE,
+        key_prefix TEXT NOT NULL,
+        scopes TEXT NOT NULL,
+        expires_at TEXT,
+        last_used TEXT,
+        created_at TEXT NOT NULL,
+        revoked_at TEXT
+      );
+
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_api_keys_active_name
+      ON api_keys(name)
+      WHERE revoked_at IS NULL;
+
+      CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash);
+
+      CREATE TABLE IF NOT EXISTS bridge_request_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        key_name TEXT NOT NULL,
+        method TEXT NOT NULL,
+        path TEXT NOT NULL,
+        ip TEXT NOT NULL,
+        status_code INTEGER NOT NULL,
+        created_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_bridge_request_log_key_time
+      ON bridge_request_log(key_name, created_at);
+
+      CREATE TABLE IF NOT EXISTS bridge_state (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        paused INTEGER NOT NULL DEFAULT 0,
+        public_url TEXT,
+        tunnel TEXT,
+        updated_at TEXT NOT NULL
+      );
     `);
+
+    this.db
+      .prepare(
+        `INSERT OR IGNORE INTO bridge_state (id, paused, public_url, tunnel, updated_at)
+         VALUES (1, 0, NULL, NULL, ?)`,
+      )
+      .run(now);
   }
 
   private rowToTask(row: TaskRow): Task {
@@ -102,6 +184,44 @@ export class Store {
       scope: row.scope,
       connected_at: row.connected_at,
       status: row.status as AgentStatus,
+    };
+  }
+
+  private rowToApiKey(row: ApiKeyRow): ApiKeyRecord {
+    return {
+      id: row.id,
+      name: row.name,
+      key_hash: row.key_hash,
+      key_prefix: row.key_prefix,
+      scopes: row.scopes
+        .split(',')
+        .map((scope) => scope.trim())
+        .filter(Boolean) as ApiKeyRecord['scopes'],
+      expires_at: row.expires_at,
+      last_used: row.last_used,
+      created_at: row.created_at,
+      revoked_at: row.revoked_at,
+    };
+  }
+
+  private rowToBridgeRequest(row: BridgeRequestRow): BridgeRequestLogEntry {
+    return {
+      id: row.id,
+      key_name: row.key_name,
+      method: row.method,
+      path: row.path,
+      ip: row.ip,
+      status_code: row.status_code,
+      created_at: row.created_at,
+    };
+  }
+
+  private rowToBridgeState(row: BridgeStateRow): BridgeState {
+    return {
+      paused: row.paused === 1,
+      public_url: row.public_url,
+      tunnel: row.tunnel as BridgeTunnel | null,
+      updated_at: row.updated_at,
     };
   }
 
@@ -270,6 +390,147 @@ export class Store {
 
     const res = this.db.prepare('DELETE FROM agents WHERE agent_id = ?').run(agentId);
     return res.changes > 0;
+  }
+
+  createApiKey(input: ApiKeyRecord): ApiKeyRecord {
+    this.db
+      .prepare(
+        `INSERT INTO api_keys (id, name, key_hash, key_prefix, scopes, expires_at, last_used, created_at, revoked_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        input.id,
+        input.name,
+        input.key_hash,
+        input.key_prefix,
+        input.scopes.join(','),
+        input.expires_at,
+        input.last_used,
+        input.created_at,
+        input.revoked_at,
+      );
+
+    return this.getApiKeyByHash(input.key_hash)!;
+  }
+
+  getApiKeyByHash(keyHash: string): ApiKeyRecord | null {
+    const row = this.db.prepare('SELECT * FROM api_keys WHERE key_hash = ?').get(keyHash) as
+      | ApiKeyRow
+      | undefined;
+    return row ? this.rowToApiKey(row) : null;
+  }
+
+  getActiveApiKeyByName(name: string): ApiKeyRecord | null {
+    const row = this.db
+      .prepare('SELECT * FROM api_keys WHERE name = ? AND revoked_at IS NULL ORDER BY created_at DESC LIMIT 1')
+      .get(name) as ApiKeyRow | undefined;
+    return row ? this.rowToApiKey(row) : null;
+  }
+
+  listApiKeys(): ApiKeyRecord[] {
+    const rows = this.db
+      .prepare('SELECT * FROM api_keys WHERE revoked_at IS NULL ORDER BY created_at DESC')
+      .all() as ApiKeyRow[];
+    return rows.map((row) => this.rowToApiKey(row));
+  }
+
+  touchApiKey(id: string, lastUsed: string = new Date().toISOString()): boolean {
+    const result = this.db.prepare('UPDATE api_keys SET last_used = ? WHERE id = ?').run(lastUsed, id);
+    return result.changes > 0;
+  }
+
+  revokeApiKey(id: string, revokedAt: string = new Date().toISOString()): boolean {
+    const result = this.db
+      .prepare('UPDATE api_keys SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL')
+      .run(revokedAt, id);
+    return result.changes > 0;
+  }
+
+  logBridgeRequest(
+    input: Omit<BridgeRequestLogEntry, 'id'>,
+  ): BridgeRequestLogEntry {
+    const result = this.db
+      .prepare(
+        `INSERT INTO bridge_request_log (key_name, method, path, ip, status_code, created_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run(input.key_name, input.method, input.path, input.ip, input.status_code, input.created_at);
+
+    const row = this.db
+      .prepare('SELECT * FROM bridge_request_log WHERE id = ?')
+      .get(result.lastInsertRowid) as BridgeRequestRow;
+    return this.rowToBridgeRequest(row);
+  }
+
+  listBridgeRequests(filter: BridgeRequestLogFilter = {}): BridgeRequestLogEntry[] {
+    const conditions: string[] = [];
+    const params: unknown[] = [];
+
+    if (filter.keyName) {
+      conditions.push('key_name = ?');
+      params.push(filter.keyName);
+    }
+
+    const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+    const limit = filter.limit ?? 50;
+    const rows = this.db
+      .prepare(`SELECT * FROM bridge_request_log ${where} ORDER BY created_at DESC LIMIT ?`)
+      .all(...params, limit) as BridgeRequestRow[];
+
+    return rows.map((row) => this.rowToBridgeRequest(row));
+  }
+
+  countBridgeRequestsSince(keyName: string, since: string): number {
+    const row = this.db
+      .prepare(
+        `SELECT COUNT(*) as count
+         FROM bridge_request_log
+         WHERE key_name = ? AND created_at >= ?`,
+      )
+      .get(keyName, since) as { count: number };
+    return row.count;
+  }
+
+  getLatestBridgeRequest(): BridgeRequestLogEntry | null {
+    const row = this.db
+      .prepare('SELECT * FROM bridge_request_log ORDER BY created_at DESC LIMIT 1')
+      .get() as BridgeRequestRow | undefined;
+    return row ? this.rowToBridgeRequest(row) : null;
+  }
+
+  getBridgeState(): BridgeState {
+    const row = this.db.prepare('SELECT paused, public_url, tunnel, updated_at FROM bridge_state WHERE id = 1').get() as
+      | BridgeStateRow
+      | undefined;
+
+    if (!row) {
+      const state: BridgeState = {
+        paused: false,
+        public_url: null,
+        tunnel: null,
+        updated_at: new Date().toISOString(),
+      };
+      this.setBridgeState(state);
+      return state;
+    }
+
+    return this.rowToBridgeState(row);
+  }
+
+  setBridgeState(state: BridgeState): BridgeState {
+    this.db
+      .prepare(
+        `INSERT INTO bridge_state (id, paused, public_url, tunnel, updated_at)
+         VALUES (1, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+           paused = excluded.paused,
+           public_url = excluded.public_url,
+           tunnel = excluded.tunnel,
+           updated_at = excluded.updated_at`,
+      )
+      .run(state.paused ? 1 : 0, state.public_url, state.tunnel, state.updated_at);
+
+    return this.getBridgeState();
   }
 
   close(): void {

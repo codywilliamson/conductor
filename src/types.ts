@@ -2,6 +2,17 @@ export type TaskStatus = 'available' | 'claimed' | 'working' | 'review' | 'done'
 export type TaskPriority = 0 | 1 | 2 | 3;
 export type ResultType = 'diff' | 'pr_url' | 'file' | 'text';
 export type AgentStatus = 'idle' | 'working' | 'disconnected';
+export type ApiKeyScope =
+  | 'tasks:read'
+  | 'tasks:write'
+  | 'tasks:claim'
+  | 'status:write'
+  | 'result:write'
+  | 'feedback:read'
+  | 'feedback:write'
+  | 'events:read'
+  | 'admin';
+export type BridgeTunnel = 'cloudflare' | 'ngrok' | 'tailscale' | 'none';
 
 export interface Task {
   id: string;
@@ -58,6 +69,40 @@ export interface RiffEvent {
   type: EventType;
   timestamp: string;
   data: Record<string, unknown>;
+}
+
+export interface ApiKeyRecord {
+  id: string;
+  name: string;
+  key_hash: string;
+  key_prefix: string;
+  scopes: ApiKeyScope[];
+  expires_at: string | null;
+  last_used: string | null;
+  created_at: string;
+  revoked_at: string | null;
+}
+
+export interface BridgeRequestLogEntry {
+  id: number;
+  key_name: string;
+  method: string;
+  path: string;
+  ip: string;
+  status_code: number;
+  created_at: string;
+}
+
+export interface BridgeRequestLogFilter {
+  keyName?: string;
+  limit?: number;
+}
+
+export interface BridgeState {
+  paused: boolean;
+  public_url: string | null;
+  tunnel: BridgeTunnel | null;
+  updated_at: string;
 }
 
 export type EventType =
