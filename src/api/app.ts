@@ -4,13 +4,31 @@ import type { TaskService } from '../core/task-service.js';
 import type { AgentService } from '../core/agent-service.js';
 import type { EventBus } from '../events/event-bus.js';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
-import type { TaskStatus, TaskPriority } from '../types.js';
+import type { Store } from '../store/store.js';
+import type { ApiKeyService } from '../bridge/api-key-service.js';
+import type { RiffConfig } from '../config/config.js';
+import type { TaskStatus, TaskPriority, ApiKeyScope, ApiKeyRecord, Task } from '../types.js';
 
 interface Deps {
   taskService: TaskService;
   agentService: AgentService;
   eventBus: EventBus;
+  store?: Store;
+  apiKeyService?: ApiKeyService;
+  config?: RiffConfig;
 }
+
+interface RequestAuthContext {
+  local: boolean;
+  ip: string;
+  key: ApiKeyRecord | null;
+}
+
+type AppBindings = {
+  Variables: {
+    auth: RequestAuthContext;
+  };
+};
 
 // map service error messages to http status codes
 function errorStatus(msg: string): ContentfulStatusCode {
@@ -20,12 +38,158 @@ function errorStatus(msg: string): ContentfulStatusCode {
   return 400;
 }
 
-export function createApp({ taskService, agentService, eventBus }: Deps) {
-  const app = new Hono().basePath('/api/v1');
+function isLocalHost(hostname: string): boolean {
+  return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1' || hostname === '[::1]';
+}
+
+function getRequestIp(request: Request): string {
+  const forwardedFor = request.headers.get('x-forwarded-for');
+  if (forwardedFor) {
+    return forwardedFor.split(',')[0].trim();
+  }
+
+  const connectingIp = request.headers.get('cf-connecting-ip');
+  if (connectingIp) {
+    return connectingIp;
+  }
+
+  return '127.0.0.1';
+}
+
+function parseBodySize(limit: string): number {
+  const match = /^(\d+)(b|kb|mb)$/i.exec(limit.trim());
+  if (!match) {
+    return 1_048_576;
+  }
+
+  const value = Number(match[1]);
+  const unit = match[2].toLowerCase();
+  const multiplier = unit === 'mb' ? 1_048_576 : unit === 'kb' ? 1_024 : 1;
+  return value * multiplier;
+}
+
+function toBridgeTask(task: Task) {
+  return {
+    id: task.id,
+    title: task.title,
+    status: task.status,
+    priority: task.priority,
+    scope: task.scope,
+    source: task.source,
+  };
+}
+
+export function createApp({
+  taskService,
+  agentService,
+  eventBus,
+  store,
+  apiKeyService,
+  config,
+}: Deps) {
+  const app = new Hono<AppBindings>().basePath('/api/v1');
+  const bridge = store && apiKeyService && config ? { store, apiKeyService, config } : null;
+
+  const recordBridgeRequest = (auth: RequestAuthContext | undefined, request: Request, statusCode: number) => {
+    if (!bridge || !auth || auth.local || !auth.key) {
+      return;
+    }
+
+    bridge.store.logBridgeRequest({
+      key_name: auth.key.name,
+      method: request.method,
+      path: new URL(request.url).pathname,
+      ip: auth.ip,
+      status_code: statusCode,
+      created_at: new Date().toISOString(),
+    });
+  };
+
+  const withScope = <T>(scope: ApiKeyScope, handler: (c: any) => T | Promise<T>) => {
+    return async (c: any) => {
+      if (!bridge) {
+        return handler(c);
+      }
+
+      const auth = c.get('auth') as RequestAuthContext | undefined;
+      if (auth && !auth.local && (!auth.key || !bridge.apiKeyService.hasScope(auth.key, scope))) {
+        return c.json({ error: 'insufficient scopes' }, 403);
+      }
+
+      return handler(c);
+    };
+  };
+
+  if (bridge) {
+    app.use('*', async (c, next) => {
+      const requestUrl = new URL(c.req.url);
+      const auth: RequestAuthContext = {
+        local: isLocalHost(requestUrl.hostname),
+        ip: getRequestIp(c.req.raw),
+        key: null,
+      };
+
+      if (auth.local) {
+        c.set('auth', auth);
+        return next();
+      }
+
+      if (!bridge.config.bridge.enabled) {
+        return c.json({ error: 'bridge is disabled' }, 503);
+      }
+
+      const contentLength = Number(c.req.header('content-length'));
+      if (
+        Number.isFinite(contentLength) &&
+        contentLength > parseBodySize(bridge.config.bridge.max_body_size)
+      ) {
+        return c.json({ error: 'request body too large' }, 413);
+      }
+
+      const authorization = c.req.header('authorization')?.trim();
+      if (!authorization || !/^Bearer\s+\S+/i.test(authorization)) {
+        return c.json({ error: 'missing or malformed Authorization header' }, 401);
+      }
+
+      const key = bridge.apiKeyService.authenticate(authorization.replace(/^Bearer\s+/i, '').trim());
+      if (!key) {
+        return c.json({ error: 'invalid or expired api key' }, 401);
+      }
+
+      auth.key = key;
+      bridge.apiKeyService.touch(key.id);
+      c.set('auth', auth);
+
+      const bridgeState = bridge.store.getBridgeState();
+      if (bridgeState.paused) {
+        recordBridgeRequest(auth, c.req.raw, 503);
+        return c.json({ error: 'bridge is paused' }, 503);
+      }
+
+      if (
+        bridge.config.bridge.ip_allowlist.length > 0 &&
+        !bridge.config.bridge.ip_allowlist.includes(auth.ip)
+      ) {
+        recordBridgeRequest(auth, c.req.raw, 403);
+        return c.json({ error: 'request ip is not allowed' }, 403);
+      }
+
+      const limit =
+        bridge.config.bridge.rate_limit.per_key[key.name] ?? bridge.config.bridge.rate_limit.default;
+      const cutoff = new Date(Date.now() - 60_000).toISOString();
+      if (bridge.store.countBridgeRequestsSince(key.name, cutoff) >= limit) {
+        recordBridgeRequest(auth, c.req.raw, 429);
+        return c.json({ error: 'rate limit exceeded for this key' }, 429);
+      }
+
+      await next();
+      recordBridgeRequest(auth, c.req.raw, c.res.status);
+    });
+  }
 
   // --- agents ---
 
-  app.post('/agents', async (c) => {
+  app.post('/agents', withScope('admin', async (c) => {
     try {
       const body = await c.req.json();
       const agent = agentService.register(body);
@@ -34,22 +198,22 @@ export function createApp({ taskService, agentService, eventBus }: Deps) {
       const msg = (e as Error).message;
       return c.json({ error: msg }, errorStatus(msg));
     }
-  });
+  }));
 
-  app.get('/agents', (c) => {
+  app.get('/agents', withScope('admin', (c) => {
     return c.json(agentService.list());
-  });
+  }));
 
-  app.delete('/agents/:agent_id', (c) => {
+  app.delete('/agents/:agent_id', withScope('admin', (c) => {
     const agentId = c.req.param('agent_id');
     const removed = agentService.disconnect(agentId);
     if (!removed) return c.json({ error: 'agent not found' }, 404);
     return c.json({ ok: true });
-  });
+  }));
 
   // --- tasks ---
 
-  app.get('/tasks', (c) => {
+  app.get('/tasks', withScope('tasks:read', (c) => {
     const filter: Record<string, unknown> = {};
     const status = c.req.query('status');
     if (status) filter.status = status as TaskStatus;
@@ -60,9 +224,9 @@ export function createApp({ taskService, agentService, eventBus }: Deps) {
     const limit = c.req.query('limit');
     if (limit) filter.limit = Number(limit);
     return c.json(taskService.list(filter));
-  });
+  }));
 
-  app.post('/tasks', async (c) => {
+  app.post('/tasks', withScope('tasks:write', async (c) => {
     try {
       const body = await c.req.json();
       const task = taskService.create(body);
@@ -71,15 +235,15 @@ export function createApp({ taskService, agentService, eventBus }: Deps) {
       const msg = (e as Error).message;
       return c.json({ error: msg }, errorStatus(msg));
     }
-  });
+  }));
 
-  app.get('/tasks/:id', (c) => {
+  app.get('/tasks/:id', withScope('tasks:read', (c) => {
     const task = taskService.get(c.req.param('id'));
     if (!task) return c.json({ error: 'task not found' }, 404);
     return c.json(task);
-  });
+  }));
 
-  app.post('/tasks/:id/claim', async (c) => {
+  app.post('/tasks/:id/claim', withScope('tasks:claim', async (c) => {
     try {
       const { agent_id } = await c.req.json();
       const task = taskService.claim(c.req.param('id'), agent_id);
@@ -88,9 +252,9 @@ export function createApp({ taskService, agentService, eventBus }: Deps) {
       const msg = (e as Error).message;
       return c.json({ error: msg }, errorStatus(msg));
     }
-  });
+  }));
 
-  app.patch('/tasks/:id/status', async (c) => {
+  app.patch('/tasks/:id/status', withScope('status:write', async (c) => {
     try {
       const { status, message } = await c.req.json();
       const task = taskService.updateStatus(c.req.param('id'), status, message);
@@ -99,9 +263,9 @@ export function createApp({ taskService, agentService, eventBus }: Deps) {
       const msg = (e as Error).message;
       return c.json({ error: msg }, errorStatus(msg));
     }
-  });
+  }));
 
-  app.post('/tasks/:id/result', async (c) => {
+  app.post('/tasks/:id/result', withScope('result:write', async (c) => {
     try {
       const { result_type, result_data, summary } = await c.req.json();
       const task = taskService.submitResult(c.req.param('id'), result_type, result_data, summary);
@@ -110,9 +274,9 @@ export function createApp({ taskService, agentService, eventBus }: Deps) {
       const msg = (e as Error).message;
       return c.json({ error: msg }, errorStatus(msg));
     }
-  });
+  }));
 
-  app.get('/tasks/:id/feedback', (c) => {
+  app.get('/tasks/:id/feedback', withScope('feedback:read', (c) => {
     try {
       const result = taskService.getFeedback(c.req.param('id'));
       return c.json(result);
@@ -120,9 +284,9 @@ export function createApp({ taskService, agentService, eventBus }: Deps) {
       const msg = (e as Error).message;
       return c.json({ error: msg }, errorStatus(msg));
     }
-  });
+  }));
 
-  app.post('/tasks/:id/feedback', async (c) => {
+  app.post('/tasks/:id/feedback', withScope('feedback:write', async (c) => {
     try {
       const { feedback } = await c.req.json();
       const task = taskService.giveFeedback(c.req.param('id'), feedback);
@@ -131,9 +295,9 @@ export function createApp({ taskService, agentService, eventBus }: Deps) {
       const msg = (e as Error).message;
       return c.json({ error: msg }, errorStatus(msg));
     }
-  });
+  }));
 
-  app.post('/tasks/:id/approve', (c) => {
+  app.post('/tasks/:id/approve', withScope('admin', (c) => {
     try {
       const task = taskService.approve(c.req.param('id'));
       return c.json(task);
@@ -141,11 +305,11 @@ export function createApp({ taskService, agentService, eventBus }: Deps) {
       const msg = (e as Error).message;
       return c.json({ error: msg }, errorStatus(msg));
     }
-  });
+  }));
 
   // --- SSE events ---
 
-  app.get('/events', (c) => {
+  app.get('/events', withScope('events:read', (c) => {
     return streamSSE(c, async (stream) => {
       const unsubscribe = eventBus.on('*', (event) => {
         stream.writeSSE({
@@ -165,26 +329,87 @@ export function createApp({ taskService, agentService, eventBus }: Deps) {
         stream.onAbort(() => resolve());
       });
     });
-  });
+  }));
 
-  // --- webhook ingest ---
+  // --- bridge hooks ---
 
-  app.post('/hooks/ingest', async (c) => {
+  app.post('/hooks/ingest', withScope('tasks:write', async (c) => {
     try {
       const body = await c.req.json();
-      const input = {
+      if (body.batch === true) {
+        if (!Array.isArray(body.tasks) || body.tasks.length === 0) {
+          throw new Error('tasks are required');
+        }
+
+        const tasks = taskService.createBatch(body.tasks.map((task) => ({
+          title: task.title ?? `Webhook: ${task.type ?? 'external'}`,
+          description: task.description ?? task.summary,
+          scope: task.scope,
+          source: task.source,
+          source_session_id: task.source_session_id,
+          context: task.context ?? {},
+          dependencies: task.dependencies ?? [],
+          priority: task.priority ?? 2,
+        })));
+
+        return c.json(
+          {
+            created: true,
+            count: tasks.length,
+            tasks: tasks.map((task) => toBridgeTask(task)),
+          },
+          201,
+        );
+      }
+
+      const task = taskService.create({
         title: body.title ?? `Webhook: ${body.type ?? 'external'}`,
-        description: body.description ?? body.summary ?? null,
-        context: body,
+        description: body.description ?? body.summary,
+        scope: body.scope,
+        source: body.source,
+        source_session_id: body.source_session_id,
+        context: body.context ?? {},
+        dependencies: body.dependencies ?? [],
         priority: body.priority ?? 2,
-      };
-      const task = taskService.create(input);
-      return c.json(task, 201);
+      });
+      return c.json({ created: true, task: toBridgeTask(task) }, 201);
     } catch (e) {
       const msg = (e as Error).message;
       return c.json({ error: msg }, errorStatus(msg));
     }
-  });
+  }));
+
+  app.post('/hooks/feedback', withScope('feedback:write', async (c) => {
+    try {
+      const body = await c.req.json();
+      const task = taskService.giveFeedback(body.task_id, body.feedback);
+      return c.json({ updated: true, task });
+    } catch (e) {
+      const msg = (e as Error).message;
+      return c.json({ error: msg }, errorStatus(msg));
+    }
+  }));
+
+  app.get('/hooks/status', withScope('tasks:read', (c) => {
+    const taskId = c.req.query('task_id');
+    if (taskId) {
+      const task = taskService.get(taskId);
+      if (!task) {
+        return c.json({ error: 'task not found' }, 404);
+      }
+      return c.json({ task });
+    }
+
+    const filter: Record<string, unknown> = {};
+    const status = c.req.query('status');
+    if (status) filter.status = status as TaskStatus;
+    const scope = c.req.query('scope');
+    if (scope) filter.scope = scope;
+    const limit = c.req.query('limit');
+    if (limit) filter.limit = Number(limit);
+
+    return c.json({ tasks: taskService.list(filter) });
+  }));
 
   return app;
 }

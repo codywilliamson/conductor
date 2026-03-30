@@ -19,6 +19,9 @@ export interface Task {
   title: string;
   status: TaskStatus;
   description: string | null;
+  scope: string | null;
+  source: string | null;
+  source_session_id: string | null;
   context: Record<string, unknown>;
   dependencies: string[];
   priority: TaskPriority;
@@ -46,6 +49,9 @@ export interface Agent {
 export interface CreateTaskInput {
   title: string;
   description?: string;
+  scope?: string;
+  source?: string;
+  source_session_id?: string;
   context?: Record<string, unknown>;
   dependencies?: string[];
   priority?: TaskPriority;

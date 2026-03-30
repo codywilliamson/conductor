@@ -253,15 +253,16 @@ describe('API routes', () => {
       });
       expect(res.status).toBe(201);
       const body = await res.json();
-      expect(body.title).toBe('From webhook');
-      expect(body.priority).toBe(1);
+      expect(body.created).toBe(true);
+      expect(body.task.title).toBe('From webhook');
+      expect(body.task.priority).toBe(1);
     });
 
     it('uses default title when none provided', async () => {
       const res = await req('POST', '/hooks/ingest', { type: 'deploy' });
       expect(res.status).toBe(201);
       const body = await res.json();
-      expect(body.title).toBe('Webhook: deploy');
+      expect(body.task.title).toBe('Webhook: deploy');
     });
   });
 

@@ -22,6 +22,9 @@ interface TaskRow {
   title: string;
   status: TaskStatus;
   description: string | null;
+  scope: string | null;
+  source: string | null;
+  source_session_id: string | null;
   context: string;
   dependencies: string;
   priority: number;
@@ -89,6 +92,9 @@ export class Store {
         title TEXT NOT NULL,
         status TEXT NOT NULL DEFAULT 'available',
         description TEXT,
+        scope TEXT,
+        source TEXT,
+        source_session_id TEXT,
         context TEXT NOT NULL DEFAULT '{}',
         dependencies TEXT NOT NULL DEFAULT '[]',
         priority INTEGER NOT NULL DEFAULT 2,
@@ -158,6 +164,19 @@ export class Store {
          VALUES (1, 0, NULL, NULL, ?)`,
       )
       .run(now);
+
+    this.ensureColumn('tasks', 'scope', 'TEXT');
+    this.ensureColumn('tasks', 'source', 'TEXT');
+    this.ensureColumn('tasks', 'source_session_id', 'TEXT');
+  }
+
+  private ensureColumn(table: string, column: string, definition: string): void {
+    const columns = this.db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+    if (columns.some((existing) => existing.name === column)) {
+      return;
+    }
+
+    this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
   }
 
   private rowToTask(row: TaskRow): Task {
@@ -166,6 +185,9 @@ export class Store {
       title: row.title,
       status: row.status,
       description: row.description,
+      scope: row.scope,
+      source: row.source,
+      source_session_id: row.source_session_id,
       context: JSON.parse(row.context),
       dependencies: JSON.parse(row.dependencies),
       priority: row.priority as TaskPriority,
@@ -225,18 +247,34 @@ export class Store {
     };
   }
 
-  createTask(input: CreateTaskInput): Task {
+  createTask(input: CreateTaskInput, taskId?: string): Task {
     const now = new Date().toISOString();
-    const id = `task_${ulid()}`;
+    const id = taskId ?? `task_${ulid()}`;
     const stmt = this.db.prepare(`
-      INSERT INTO tasks (id, title, status, description, context, dependencies, priority, created_at, updated_at)
-      VALUES (?, ?, 'available', ?, ?, ?, ?, ?, ?)
+      INSERT INTO tasks (
+        id,
+        title,
+        status,
+        description,
+        scope,
+        source,
+        source_session_id,
+        context,
+        dependencies,
+        priority,
+        created_at,
+        updated_at
+      )
+      VALUES (?, ?, 'available', ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     stmt.run(
       id,
       input.title,
       input.description ?? null,
+      input.scope ?? null,
+      input.source ?? null,
+      input.source_session_id ?? null,
       JSON.stringify(input.context ?? {}),
       JSON.stringify(input.dependencies ?? []),
       input.priority ?? 2,
@@ -266,6 +304,11 @@ export class Store {
       params.push(filter.priority_max);
     }
 
+    if (filter.scope) {
+      conditions.push('scope = ?');
+      params.push(filter.scope);
+    }
+
     const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
     const limit = filter.limit ?? 50;
 
@@ -274,6 +317,14 @@ export class Store {
       .all(...params, limit) as TaskRow[];
 
     return rows.map((r) => this.rowToTask(r));
+  }
+
+  updateTaskDependencies(id: string, dependencies: string[]): boolean {
+    const now = new Date().toISOString();
+    const result = this.db
+      .prepare('UPDATE tasks SET dependencies = ?, updated_at = ? WHERE id = ?')
+      .run(JSON.stringify(dependencies), now, id);
+    return result.changes > 0;
   }
 
   updateTaskStatus(id: string, status: TaskStatus, claimedBy?: string | null): boolean {
@@ -531,6 +582,11 @@ export class Store {
       .run(state.paused ? 1 : 0, state.public_url, state.tunnel, state.updated_at);
 
     return this.getBridgeState();
+  }
+
+  runInTransaction<T>(callback: () => T): T {
+    const transaction = this.db.transaction(callback);
+    return transaction();
   }
 
   close(): void {

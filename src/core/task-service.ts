@@ -24,6 +24,39 @@ export class TaskService {
     return task;
   }
 
+  createBatch(inputs: CreateTaskInput[]): Task[] {
+    if (inputs.length === 0) {
+      throw new Error('tasks are required');
+    }
+
+    inputs.forEach((input) => {
+      if (!input.title?.trim()) {
+        throw new Error('title is required');
+      }
+    });
+
+    const tasks = this.store.runInTransaction(() => {
+      const created = inputs.map((input) =>
+        this.store.createTask({
+          ...input,
+          dependencies: [],
+        }),
+      );
+
+      created.forEach((task, index) => {
+        const dependencies = (inputs[index].dependencies ?? []).map((dependency) =>
+          this.resolveDependency(dependency, created),
+        );
+        this.store.updateTaskDependencies(task.id, dependencies);
+      });
+
+      return created.map((task) => this.store.getTask(task.id)!);
+    });
+
+    tasks.forEach((task) => this.events.emit('task.created', { task }));
+    return tasks;
+  }
+
   get(id: string): Task | null {
     return this.store.getTask(id);
   }
@@ -122,5 +155,18 @@ export class TaskService {
     this.store.updateTaskStatus(taskId, 'done');
     this.events.emit('task.completed', { task_id: taskId });
     return this.store.getTask(taskId)!;
+  }
+
+  private resolveDependency(dependency: string, createdTasks: Task[]): string {
+    if (!dependency.startsWith('$')) {
+      return dependency;
+    }
+
+    const index = Number.parseInt(dependency.slice(1), 10);
+    if (!Number.isInteger(index) || index < 0 || index >= createdTasks.length) {
+      throw new Error(`invalid batch dependency: ${dependency}`);
+    }
+
+    return createdTasks[index].id;
   }
 }
