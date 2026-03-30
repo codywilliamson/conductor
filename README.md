@@ -83,6 +83,8 @@ Agents register with an `agent_id`, optional `runtime` label, `capabilities` lis
 | `riff feedback <id> <msg>` | Send feedback (moves task back to working) |
 | `riff agents` | List connected agents |
 | `riff kick <agent_id>` | Disconnect an agent |
+| `riff keys create/list/revoke/rotate` | Manage bridge API keys |
+| `riff bridge status/log/pause/resume` | Inspect and control the webhook bridge |
 
 ### REST API
 
@@ -104,6 +106,49 @@ Base path: `/api/v1`
 | `POST` | `/tasks/:id/approve` | Approve a task |
 | `GET` | `/events` | SSE event stream |
 | `POST` | `/hooks/ingest` | Webhook ingest (auto-creates a task) |
+
+## Webhook Bridge
+
+Riff can expose authenticated remote endpoints through a tunnel so cloud agents, CI, or bots can create and update work on your local board.
+
+```bash
+riff keys create --name "claude-ai" --scopes "tasks:write,tasks:read,feedback:write"
+riff start --bridge
+riff bridge status
+```
+
+Bridge keys are stored hashed in SQLite, remote REST access is scope-gated, and localhost access remains unauthenticated by default. Remote requests are audited in the bridge request log and rate-limited per key.
+
+Key bridge endpoints:
+
+| Method | Endpoint | Scope |
+|---|---|---|
+| `POST` | `/api/v1/hooks/ingest` | `tasks:write` |
+| `POST` | `/api/v1/hooks/feedback` | `feedback:write` |
+| `GET` | `/api/v1/hooks/status` | `tasks:read` |
+| `GET` | `/api/v1/events` | `events:read` |
+
+Example config:
+
+```yaml
+port: 7400
+store: ./riff.db
+
+bridge:
+  enabled: true
+  tunnel: cloudflare
+  hostname: riff.yourdomain.com
+  rate_limit:
+    default: 60
+    per_key:
+      github-actions: 120
+  ip_allowlist: []
+  max_body_size: 1mb
+  cors:
+    origins:
+      - https://claude.ai
+      - https://chatgpt.com
+```
 
 ### MCP Server
 
