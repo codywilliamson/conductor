@@ -341,7 +341,7 @@ export function createApp({
           throw new Error('tasks are required');
         }
 
-        const tasks = taskService.createBatch(body.tasks.map((task) => ({
+        const tasks = taskService.createBatch(body.tasks.map((task: Record<string, unknown>) => ({
           title: task.title ?? `Webhook: ${task.type ?? 'external'}`,
           description: task.description ?? task.summary,
           scope: task.scope,

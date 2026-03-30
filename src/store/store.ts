@@ -542,6 +542,17 @@ export class Store {
     return row.count;
   }
 
+  countAllBridgeRequestsSince(since: string): number {
+    const row = this.db
+      .prepare(
+        `SELECT COUNT(*) as count
+         FROM bridge_request_log
+         WHERE created_at >= ?`,
+      )
+      .get(since) as { count: number };
+    return row.count;
+  }
+
   getLatestBridgeRequest(): BridgeRequestLogEntry | null {
     const row = this.db
       .prepare('SELECT * FROM bridge_request_log ORDER BY created_at DESC LIMIT 1')

@@ -67,7 +67,7 @@ export function loadConfig(options: LoadConfigOptions = {}): RiffConfig {
       },
       ip_allowlist:
         Array.isArray(rawConfig.bridge?.ip_allowlist) &&
-        rawConfig.bridge.ip_allowlist.every((value) => typeof value === 'string')
+        rawConfig.bridge.ip_allowlist.every((value: unknown) => typeof value === 'string')
           ? rawConfig.bridge.ip_allowlist
           : [],
       max_body_size:
@@ -77,7 +77,7 @@ export function loadConfig(options: LoadConfigOptions = {}): RiffConfig {
       cors: {
         origins:
           Array.isArray(rawConfig.bridge?.cors?.origins) &&
-          rawConfig.bridge.cors.origins.every((value) => typeof value === 'string')
+          rawConfig.bridge.cors.origins.every((value: unknown) => typeof value === 'string')
             ? rawConfig.bridge.cors.origins
             : [],
       },
