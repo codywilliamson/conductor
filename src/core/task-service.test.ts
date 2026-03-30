@@ -19,7 +19,7 @@ describe('TaskService', () => {
   });
 
   describe('create', () => {
-    it('creates a task and emits event', () => {
+    it('creates a task and emits task.created', () => {
       const listener = vi.fn();
       events.on('task.created', listener);
 
@@ -28,10 +28,14 @@ describe('TaskService', () => {
       expect(task.title).toBe('New task');
       expect(task.status).toBe('available');
       expect(listener).toHaveBeenCalledOnce();
+      expect(listener.mock.calls[0][0].data.task.id).toBe(task.id);
     });
 
     it('throws on empty title', () => {
       expect(() => service.create({ title: '' })).toThrow('title is required');
+    });
+
+    it('throws on whitespace-only title', () => {
       expect(() => service.create({ title: '   ' })).toThrow('title is required');
     });
   });
@@ -63,7 +67,7 @@ describe('TaskService', () => {
   });
 
   describe('claim', () => {
-    it('claims an available task', () => {
+    it('claims an available task and emits task.claimed', () => {
       const listener = vi.fn();
       events.on('task.claimed', listener);
 
@@ -73,6 +77,7 @@ describe('TaskService', () => {
       expect(claimed.status).toBe('claimed');
       expect(claimed.claimed_by).toBe('agent-1');
       expect(listener).toHaveBeenCalledOnce();
+      expect(listener.mock.calls[0][0].data.agent_id).toBe('agent-1');
     });
 
     it('throws if task not found', () => {
@@ -95,25 +100,20 @@ describe('TaskService', () => {
   });
 
   describe('updateStatus', () => {
-    it('transitions through valid states', () => {
+    it('transitions claimed -> working and emits status_changed', () => {
+      const listener = vi.fn();
+      events.on('task.status_changed', listener);
+
       const task = service.create({ title: 'A' });
       service.claim(task.id, 'agent-1');
       const working = service.updateStatus(task.id, 'working');
 
       expect(working.status).toBe('working');
+      expect(listener).toHaveBeenCalledOnce();
+      expect(listener.mock.calls[0][0].data.status).toBe('working');
     });
 
-    it('throws on invalid transition', () => {
-      const task = service.create({ title: 'A' });
-      // available -> working is invalid (must go through claimed)
-      expect(() => service.updateStatus(task.id, 'working')).toThrow('invalid transition');
-    });
-
-    it('throws for nonexistent task', () => {
-      expect(() => service.updateStatus('task_nope', 'working')).toThrow('task not found');
-    });
-
-    it('emits task.failed on failure', () => {
+    it('transitions to failed and emits task.failed', () => {
       const listener = vi.fn();
       events.on('task.failed', listener);
 
@@ -125,36 +125,70 @@ describe('TaskService', () => {
       expect(listener.mock.calls[0][0].data.message).toBe('something broke');
     });
 
-    it('emits task.completed on done', () => {
+    it('transitions review -> done and emits task.completed', () => {
       const listener = vi.fn();
       events.on('task.completed', listener);
 
       const task = service.create({ title: 'A' });
       service.claim(task.id, 'agent-1');
       service.updateStatus(task.id, 'working');
-      // submit result to get to review
       service.submitResult(task.id, 'text', 'done');
-      // then review -> done
-      service.updateStatus(task.id, 'done');
+      const done = service.updateStatus(task.id, 'done');
 
+      expect(done.status).toBe('done');
       expect(listener).toHaveBeenCalledOnce();
     });
 
-    it('emits task.status_changed for other transitions', () => {
-      const listener = vi.fn();
-      events.on('task.status_changed', listener);
+    it('throws on invalid transition', () => {
+      const task = service.create({ title: 'A' });
+      expect(() => service.updateStatus(task.id, 'working')).toThrow('invalid transition');
+    });
 
+    it('throws on invalid transition from done', () => {
+      const task = service.create({ title: 'A' });
+      service.claim(task.id, 'agent-1');
+      service.updateStatus(task.id, 'working');
+      service.submitResult(task.id, 'text', 'x');
+      service.updateStatus(task.id, 'done');
+
+      expect(() => service.updateStatus(task.id, 'available')).toThrow('invalid transition');
+    });
+
+    it('throws for non-existent task', () => {
+      expect(() => service.updateStatus('task_nope', 'working')).toThrow('task not found');
+    });
+
+    it('allows failed -> available (retry)', () => {
+      const task = service.create({ title: 'A' });
+      service.claim(task.id, 'agent-1');
+      service.updateStatus(task.id, 'failed');
+
+      const retried = service.updateStatus(task.id, 'available');
+      expect(retried.status).toBe('available');
+    });
+
+    it('allows working -> available (cancel)', () => {
       const task = service.create({ title: 'A' });
       service.claim(task.id, 'agent-1');
       service.updateStatus(task.id, 'working');
 
-      expect(listener).toHaveBeenCalledOnce();
-      expect(listener.mock.calls[0][0].data.status).toBe('working');
+      const cancelled = service.updateStatus(task.id, 'available');
+      expect(cancelled.status).toBe('available');
+    });
+
+    it('allows review -> working (revision)', () => {
+      const task = service.create({ title: 'A' });
+      service.claim(task.id, 'agent-1');
+      service.updateStatus(task.id, 'working');
+      service.submitResult(task.id, 'text', 'x');
+
+      const revision = service.updateStatus(task.id, 'working');
+      expect(revision.status).toBe('working');
     });
   });
 
   describe('submitResult', () => {
-    it('submits a result and moves to review', () => {
+    it('submits result for a working task and emits event', () => {
       const listener = vi.fn();
       events.on('task.result_submitted', listener);
 
@@ -162,29 +196,39 @@ describe('TaskService', () => {
       service.claim(task.id, 'agent-1');
       service.updateStatus(task.id, 'working');
 
-      const result = service.submitResult(task.id, 'diff', 'patch content', 'fixed it');
+      const updated = service.submitResult(task.id, 'diff', 'patch data', 'fixed bug');
 
-      expect(result.status).toBe('review');
-      expect(result.result).toEqual({
+      expect(updated.status).toBe('review');
+      expect(updated.result).toEqual({
         result_type: 'diff',
-        result_data: 'patch content',
-        summary: 'fixed it',
+        result_data: 'patch data',
+        summary: 'fixed bug',
       });
       expect(listener).toHaveBeenCalledOnce();
+      expect(listener.mock.calls[0][0].data.result_type).toBe('diff');
     });
 
-    it('throws if task is not working', () => {
+    it('defaults summary to null', () => {
+      const task = service.create({ title: 'A' });
+      service.claim(task.id, 'agent-1');
+      service.updateStatus(task.id, 'working');
+
+      const updated = service.submitResult(task.id, 'text', 'data');
+      expect(updated.result!.summary).toBeNull();
+    });
+
+    it('throws when task is not working', () => {
       const task = service.create({ title: 'A' });
       expect(() => service.submitResult(task.id, 'text', 'data')).toThrow('must be working');
     });
 
-    it('throws for nonexistent task', () => {
+    it('throws for non-existent task', () => {
       expect(() => service.submitResult('task_nope', 'text', 'data')).toThrow('task not found');
     });
   });
 
-  describe('feedback', () => {
-    it('gets feedback (none by default)', () => {
+  describe('getFeedback / giveFeedback', () => {
+    it('returns no feedback initially', () => {
       const task = service.create({ title: 'A' });
       const fb = service.getFeedback(task.id);
 
@@ -192,37 +236,42 @@ describe('TaskService', () => {
       expect(fb.feedback).toBeNull();
     });
 
-    it('gives feedback and moves back to working', () => {
+    it('gives feedback, moves task back to working, and emits event', () => {
       const listener = vi.fn();
       events.on('task.feedback_given', listener);
 
       const task = service.create({ title: 'A' });
       service.claim(task.id, 'agent-1');
       service.updateStatus(task.id, 'working');
-      service.submitResult(task.id, 'text', 'done');
+      service.submitResult(task.id, 'text', 'result');
 
-      const updated = service.giveFeedback(task.id, 'please fix X');
+      const updated = service.giveFeedback(task.id, 'needs more tests');
 
       expect(updated.status).toBe('working');
       expect(listener).toHaveBeenCalledOnce();
+      expect(listener.mock.calls[0][0].data.feedback).toBe('needs more tests');
 
       const fb = service.getFeedback(task.id);
       expect(fb.has_feedback).toBe(true);
-      expect(fb.feedback).toBe('please fix X');
+      expect(fb.feedback).toBe('needs more tests');
     });
 
-    it('throws if task is not in review', () => {
+    it('throws when giving feedback on non-review task', () => {
       const task = service.create({ title: 'A' });
       expect(() => service.giveFeedback(task.id, 'nope')).toThrow('must be in review');
     });
 
-    it('throws for nonexistent task', () => {
+    it('throws getFeedback for non-existent task', () => {
       expect(() => service.getFeedback('task_nope')).toThrow('task not found');
+    });
+
+    it('throws giveFeedback for non-existent task', () => {
+      expect(() => service.giveFeedback('task_nope', 'nope')).toThrow('task not found');
     });
   });
 
   describe('approve', () => {
-    it('approves a task in review', () => {
+    it('approves a task in review and emits task.completed', () => {
       const listener = vi.fn();
       events.on('task.completed', listener);
 
@@ -237,12 +286,12 @@ describe('TaskService', () => {
       expect(listener).toHaveBeenCalledOnce();
     });
 
-    it('throws if not in review', () => {
+    it('throws when task is not in review', () => {
       const task = service.create({ title: 'A' });
-      expect(() => service.approve(task.id)).toThrow('must be in review');
+      expect(() => service.approve(task.id)).toThrow('must be in review to approve');
     });
 
-    it('throws for nonexistent task', () => {
+    it('throws for non-existent task', () => {
       expect(() => service.approve('task_nope')).toThrow('task not found');
     });
   });
