@@ -150,6 +150,8 @@ bridge:
       - https://chatgpt.com
 ```
 
+The `cors.origins` list is mainly a future-facing hook for browser-based bridge clients and an eventual MCP connector flow. Listing `claude.ai` or `chatgpt.com` here does not by itself enable direct hosted-chat integration today.
+
 ### MCP Server
 
 Exposed via stdio transport. Tools available to MCP clients:
@@ -196,14 +198,14 @@ Add Riff as an MCP server in your Claude Code config (or any MCP-compatible clie
       "command": "node",
       "args": ["dist/mcp/stdio.js"],
       "env": {
-        "RIFF_DB": "~/.conductor/riff.db"
+        "RIFF_DB": "~/.riff/riff.db"
       }
     }
   }
 }
 ```
 
-The `RIFF_DB` env var controls the database path (defaults to `riff.db` in the working directory).
+The `RIFF_DB` env var controls the database path. Use `~/.riff/riff.db` to match the default CLI data directory, or omit it to use `./riff.db` in the current working directory.
 
 ## License
 
