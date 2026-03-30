@@ -15,14 +15,14 @@ export function createMcpServer(deps: McpServerDeps): McpServer {
   const { taskService, agentService } = deps;
 
   const server = new McpServer({
-    name: 'conductor',
+    name: 'riff',
     version: '0.1.0',
   });
 
-  // conductor_register - register an agent session
+  // riff_register - register an agent session
   server.tool(
-    'conductor_register',
-    'Register an agent session with the conductor',
+    'riff_register',
+    'Register an agent session with riff',
     {
       agent_id: z.string(),
       runtime: z.string().optional(),
@@ -54,9 +54,9 @@ export function createMcpServer(deps: McpServerDeps): McpServer {
     },
   );
 
-  // conductor_list_tasks - list available tasks
+  // riff_list_tasks - list available tasks
   server.tool(
-    'conductor_list_tasks',
+    'riff_list_tasks',
     'List available tasks',
     {
       status: z.string().optional().default('available'),
@@ -84,9 +84,9 @@ export function createMcpServer(deps: McpServerDeps): McpServer {
     },
   );
 
-  // conductor_claim_task - atomically claim a task
+  // riff_claim_task - atomically claim a task
   server.tool(
-    'conductor_claim_task',
+    'riff_claim_task',
     'Atomically claim a task for an agent',
     {
       task_id: z.string(),
@@ -112,9 +112,9 @@ export function createMcpServer(deps: McpServerDeps): McpServer {
     },
   );
 
-  // conductor_update_status - push a status transition
+  // riff_update_status - push a status transition
   server.tool(
-    'conductor_update_status',
+    'riff_update_status',
     'Push a status transition on a task',
     {
       task_id: z.string(),
@@ -140,9 +140,9 @@ export function createMcpServer(deps: McpServerDeps): McpServer {
     },
   );
 
-  // conductor_submit_result - submit work product
+  // riff_submit_result - submit work product
   server.tool(
-    'conductor_submit_result',
+    'riff_submit_result',
     'Submit work product for a task',
     {
       task_id: z.string(),
@@ -170,9 +170,9 @@ export function createMcpServer(deps: McpServerDeps): McpServer {
     },
   );
 
-  // conductor_get_feedback - check for human review feedback
+  // riff_get_feedback - check for human review feedback
   server.tool(
-    'conductor_get_feedback',
+    'riff_get_feedback',
     'Check for human review feedback on a task',
     {
       task_id: z.string(),

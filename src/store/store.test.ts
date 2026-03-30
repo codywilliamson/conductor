@@ -12,9 +12,7 @@ describe('Store', () => {
     store.close();
   });
 
-  // --- tasks ---
-
-  describe('tasks', () => {
+  describe('createTask', () => {
     it('creates a task with defaults', () => {
       const task = store.createTask({ title: 'Do stuff' });
 
@@ -31,43 +29,46 @@ describe('Store', () => {
       expect(task.updated_at).toBeDefined();
     });
 
-    it('creates a task with all fields', () => {
+    it('creates a task with custom fields', () => {
       const task = store.createTask({
         title: 'Full task',
         description: 'A description',
         context: { repo: 'test' },
-        dependencies: ['dep1'],
+        dependencies: ['dep1', 'dep2'],
         priority: 0,
       });
 
       expect(task.title).toBe('Full task');
       expect(task.description).toBe('A description');
       expect(task.context).toEqual({ repo: 'test' });
-      expect(task.dependencies).toEqual(['dep1']);
+      expect(task.dependencies).toEqual(['dep1', 'dep2']);
       expect(task.priority).toBe(0);
     });
+  });
 
-    it('gets a task by id', () => {
+  describe('getTask', () => {
+    it('returns an existing task', () => {
       const created = store.createTask({ title: 'Find me' });
       const found = store.getTask(created.id);
 
-      expect(found).toBeDefined();
+      expect(found).not.toBeNull();
       expect(found!.id).toBe(created.id);
     });
 
-    it('returns null for nonexistent task', () => {
+    it('returns null for non-existent id', () => {
       expect(store.getTask('task_nope')).toBeNull();
     });
+  });
 
-    it('lists tasks with no filter', () => {
+  describe('listTasks', () => {
+    it('returns all tasks when no filter', () => {
       store.createTask({ title: 'A' });
       store.createTask({ title: 'B' });
 
-      const tasks = store.listTasks();
-      expect(tasks).toHaveLength(2);
+      expect(store.listTasks()).toHaveLength(2);
     });
 
-    it('filters tasks by status', () => {
+    it('filters by status', () => {
       const t = store.createTask({ title: 'A' });
       store.createTask({ title: 'B' });
       store.updateTaskStatus(t.id, 'claimed', 'agent-1');
@@ -77,9 +78,10 @@ describe('Store', () => {
       expect(available[0].title).toBe('B');
     });
 
-    it('filters tasks by priority_max', () => {
+    it('filters by priority_max', () => {
       store.createTask({ title: 'High', priority: 0 });
-      store.createTask({ title: 'Medium', priority: 2 });
+      store.createTask({ title: 'Normal', priority: 2 });
+      store.createTask({ title: 'Low', priority: 3 });
 
       const highOnly = store.listTasks({ priority_max: 1 });
       expect(highOnly).toHaveLength(1);
@@ -87,86 +89,66 @@ describe('Store', () => {
     });
 
     it('respects limit', () => {
-      for (let i = 0; i < 5; i++) {
-        store.createTask({ title: `Task ${i}` });
-      }
+      for (let i = 0; i < 5; i++) store.createTask({ title: `t${i}` });
 
-      const limited = store.listTasks({ limit: 2 });
-      expect(limited).toHaveLength(2);
+      expect(store.listTasks({ limit: 3 })).toHaveLength(3);
     });
 
-    it('orders tasks by priority asc then created_at asc', () => {
+    it('orders by priority asc then created_at asc', () => {
       store.createTask({ title: 'Low', priority: 3 });
       store.createTask({ title: 'High', priority: 0 });
-      store.createTask({ title: 'Medium', priority: 2 });
+      store.createTask({ title: 'Mid', priority: 1 });
 
       const tasks = store.listTasks();
-      expect(tasks.map((t) => t.title)).toEqual(['High', 'Medium', 'Low']);
+      expect(tasks.map((t) => t.title)).toEqual(['High', 'Mid', 'Low']);
     });
 
-    it('updates task status', () => {
-      const task = store.createTask({ title: 'A' });
-      const ok = store.updateTaskStatus(task.id, 'claimed', 'agent-1');
+    it('combines status and priority_max filters', () => {
+      const t = store.createTask({ title: 'High avail', priority: 0 });
+      store.createTask({ title: 'Low avail', priority: 3 });
+      store.updateTaskStatus(t.id, 'claimed', 'a1');
+      store.createTask({ title: 'High avail 2', priority: 1 });
 
-      expect(ok).toBe(true);
+      const results = store.listTasks({ status: 'available', priority_max: 1 });
+      expect(results).toHaveLength(1);
+      expect(results[0].title).toBe('High avail 2');
+    });
+  });
+
+  describe('updateTaskStatus', () => {
+    it('updates status and sets claimed_by', () => {
+      const task = store.createTask({ title: 'x' });
+      store.updateTaskStatus(task.id, 'claimed', 'agent-1');
+
       const updated = store.getTask(task.id)!;
       expect(updated.status).toBe('claimed');
       expect(updated.claimed_by).toBe('agent-1');
     });
 
-    it('resets claimed_by when moving to available', () => {
-      const task = store.createTask({ title: 'A' });
+    it('resets claimed_by, result, and feedback when set to available', () => {
+      const task = store.createTask({ title: 'x' });
       store.updateTaskStatus(task.id, 'claimed', 'agent-1');
+      store.updateTaskStatus(task.id, 'working');
+      store.setTaskResult(task.id, { result_type: 'text', result_data: 'hi', summary: null });
+      store.setTaskFeedback(task.id, 'looks good');
+
       store.updateTaskStatus(task.id, 'available');
 
-      const updated = store.getTask(task.id)!;
-      expect(updated.status).toBe('available');
-      expect(updated.claimed_by).toBeNull();
-    });
-
-    it('returns false for update on nonexistent task', () => {
-      expect(store.updateTaskStatus('task_nope', 'claimed')).toBe(false);
-    });
-
-    it('sets task result and moves to review', () => {
-      const task = store.createTask({ title: 'A' });
-      store.setTaskResult(task.id, {
-        result_type: 'text',
-        result_data: 'done',
-        summary: 'all good',
-      });
-
-      const updated = store.getTask(task.id)!;
-      expect(updated.status).toBe('review');
-      expect(updated.result).toEqual({
-        result_type: 'text',
-        result_data: 'done',
-        summary: 'all good',
-      });
-    });
-
-    it('sets and gets task feedback', () => {
-      const task = store.createTask({ title: 'A' });
-      store.setTaskFeedback(task.id, 'needs changes');
-
-      expect(store.getTaskFeedback(task.id)).toBe('needs changes');
-    });
-
-    it('returns null feedback for task without feedback', () => {
-      const task = store.createTask({ title: 'A' });
+      const reset = store.getTask(task.id)!;
+      expect(reset.status).toBe('available');
+      expect(reset.claimed_by).toBeNull();
+      expect(reset.result).toBeNull();
       expect(store.getTaskFeedback(task.id)).toBeNull();
     });
 
-    it('returns null feedback for nonexistent task', () => {
-      expect(store.getTaskFeedback('task_nope')).toBeNull();
+    it('returns false for non-existent task', () => {
+      expect(store.updateTaskStatus('task_nope', 'claimed')).toBe(false);
     });
   });
 
-  // --- claim ---
-
   describe('claimTask', () => {
     it('claims an available task', () => {
-      const task = store.createTask({ title: 'A' });
+      const task = store.createTask({ title: 'claimable' });
       const claimed = store.claimTask(task.id, 'agent-1');
 
       expect(claimed).not.toBeNull();
@@ -174,43 +156,85 @@ describe('Store', () => {
       expect(claimed!.claimed_by).toBe('agent-1');
     });
 
-    it('returns null if task is not available', () => {
-      const task = store.createTask({ title: 'A' });
-      store.updateTaskStatus(task.id, 'claimed', 'agent-1');
+    it('returns null if task is already claimed', () => {
+      const task = store.createTask({ title: 'taken' });
+      store.claimTask(task.id, 'agent-1');
 
       expect(store.claimTask(task.id, 'agent-2')).toBeNull();
     });
 
     it('returns null if dependencies are not done', () => {
-      const dep = store.createTask({ title: 'Dep' });
-      const task = store.createTask({ title: 'Blocked', dependencies: [dep.id] });
+      const dep = store.createTask({ title: 'dependency' });
+      const task = store.createTask({ title: 'dependent', dependencies: [dep.id] });
 
       expect(store.claimTask(task.id, 'agent-1')).toBeNull();
     });
 
-    it('allows claim when dependencies are done', () => {
-      const dep = store.createTask({ title: 'Dep' });
+    it('allows claim when all dependencies are done', () => {
+      const dep = store.createTask({ title: 'dep' });
       store.updateTaskStatus(dep.id, 'done');
 
-      const task = store.createTask({ title: 'Unblocked', dependencies: [dep.id] });
+      const task = store.createTask({ title: 'after dep', dependencies: [dep.id] });
       const claimed = store.claimTask(task.id, 'agent-1');
 
       expect(claimed).not.toBeNull();
       expect(claimed!.status).toBe('claimed');
     });
 
-    it('returns null for nonexistent task', () => {
+    it('returns null for non-existent task', () => {
       expect(store.claimTask('task_nope', 'agent-1')).toBeNull();
+    });
+
+    it('returns null when only some dependencies are done', () => {
+      const dep1 = store.createTask({ title: 'dep1' });
+      const dep2 = store.createTask({ title: 'dep2' });
+      store.updateTaskStatus(dep1.id, 'done');
+      // dep2 is still available
+
+      const task = store.createTask({
+        title: 'needs both',
+        dependencies: [dep1.id, dep2.id],
+      });
+      expect(store.claimTask(task.id, 'agent-1')).toBeNull();
     });
   });
 
-  // --- agents ---
+  describe('setTaskResult / getTaskFeedback', () => {
+    it('sets result and moves task to review', () => {
+      const task = store.createTask({ title: 'r' });
+      store.setTaskResult(task.id, { result_type: 'text', result_data: 'done', summary: 'ok' });
 
-  describe('agents', () => {
-    it('registers an agent', () => {
-      const agent = store.registerAgent({ agent_id: 'agent-1' });
+      const updated = store.getTask(task.id)!;
+      expect(updated.status).toBe('review');
+      expect(updated.result).toEqual({
+        result_type: 'text',
+        result_data: 'done',
+        summary: 'ok',
+      });
+    });
 
-      expect(agent.agent_id).toBe('agent-1');
+    it('sets and gets feedback', () => {
+      const task = store.createTask({ title: 'f' });
+      store.setTaskFeedback(task.id, 'needs work');
+
+      expect(store.getTaskFeedback(task.id)).toBe('needs work');
+    });
+
+    it('returns null feedback for task with none set', () => {
+      const task = store.createTask({ title: 'no feedback' });
+      expect(store.getTaskFeedback(task.id)).toBeNull();
+    });
+
+    it('returns null feedback for non-existent task', () => {
+      expect(store.getTaskFeedback('task_nope')).toBeNull();
+    });
+  });
+
+  describe('registerAgent', () => {
+    it('registers an agent with defaults', () => {
+      const agent = store.registerAgent({ agent_id: 'a1' });
+
+      expect(agent.agent_id).toBe('a1');
       expect(agent.runtime).toBeNull();
       expect(agent.capabilities).toEqual([]);
       expect(agent.scope).toBeNull();
@@ -218,69 +242,104 @@ describe('Store', () => {
       expect(agent.connected_at).toBeDefined();
     });
 
-    it('registers agent with all fields', () => {
+    it('registers an agent with custom fields', () => {
       const agent = store.registerAgent({
-        agent_id: 'agent-2',
+        agent_id: 'a2',
         runtime: 'claude',
-        capabilities: ['code', 'review'],
+        capabilities: ['code', 'test'],
         scope: 'backend',
       });
 
       expect(agent.runtime).toBe('claude');
-      expect(agent.capabilities).toEqual(['code', 'review']);
+      expect(agent.capabilities).toEqual(['code', 'test']);
       expect(agent.scope).toBe('backend');
     });
 
-    it('re-registers (upserts) an agent', () => {
-      store.registerAgent({ agent_id: 'agent-1', runtime: 'v1' });
-      const updated = store.registerAgent({ agent_id: 'agent-1', runtime: 'v2' });
+    it('re-registers (upserts) an existing agent', () => {
+      store.registerAgent({ agent_id: 'a1', runtime: 'v1' });
+      const agent = store.registerAgent({ agent_id: 'a1', runtime: 'v2' });
 
-      expect(updated.runtime).toBe('v2');
+      expect(agent.runtime).toBe('v2');
       expect(store.listAgents()).toHaveLength(1);
     });
+  });
 
-    it('gets agent by id', () => {
-      store.registerAgent({ agent_id: 'agent-1' });
-      expect(store.getAgent('agent-1')).toBeDefined();
+  describe('getAgent', () => {
+    it('returns existing agent', () => {
+      store.registerAgent({ agent_id: 'a1' });
+      expect(store.getAgent('a1')).not.toBeNull();
+      expect(store.getAgent('a1')!.agent_id).toBe('a1');
     });
 
-    it('returns null for nonexistent agent', () => {
+    it('returns null for non-existent agent', () => {
       expect(store.getAgent('nope')).toBeNull();
     });
+  });
 
-    it('lists agents', () => {
-      store.registerAgent({ agent_id: 'a' });
-      store.registerAgent({ agent_id: 'b' });
+  describe('listAgents', () => {
+    it('returns all agents', () => {
+      store.registerAgent({ agent_id: 'a1' });
+      store.registerAgent({ agent_id: 'a2' });
 
       expect(store.listAgents()).toHaveLength(2);
     });
 
-    it('updates agent status', () => {
-      store.registerAgent({ agent_id: 'agent-1' });
-      store.updateAgentStatus('agent-1', 'working');
+    it('returns empty array when no agents registered', () => {
+      expect(store.listAgents()).toEqual([]);
+    });
+  });
 
-      expect(store.getAgent('agent-1')!.status).toBe('working');
+  describe('updateAgentStatus', () => {
+    it('updates status', () => {
+      store.registerAgent({ agent_id: 'a1' });
+      store.updateAgentStatus('a1', 'working');
+
+      expect(store.getAgent('a1')!.status).toBe('working');
     });
 
-    it('returns false for updating nonexistent agent', () => {
-      expect(store.updateAgentStatus('nope', 'working')).toBe(false);
+    it('returns false for non-existent agent', () => {
+      expect(store.updateAgentStatus('nope', 'idle')).toBe(false);
+    });
+  });
+
+  describe('removeAgent', () => {
+    it('removes the agent', () => {
+      store.registerAgent({ agent_id: 'a1' });
+      expect(store.removeAgent('a1')).toBe(true);
+      expect(store.getAgent('a1')).toBeNull();
     });
 
-    it('removes agent and releases its tasks', () => {
-      store.registerAgent({ agent_id: 'agent-1' });
-      const task = store.createTask({ title: 'Assigned' });
-      store.updateTaskStatus(task.id, 'claimed', 'agent-1');
+    it('releases claimed and working tasks back to available', () => {
+      store.registerAgent({ agent_id: 'a1' });
+      const t1 = store.createTask({ title: 'claimed' });
+      const t2 = store.createTask({ title: 'working' });
 
-      const removed = store.removeAgent('agent-1');
+      store.claimTask(t1.id, 'a1');
+      store.claimTask(t2.id, 'a1');
+      store.updateTaskStatus(t2.id, 'working');
 
-      expect(removed).toBe(true);
-      expect(store.getAgent('agent-1')).toBeNull();
-      const released = store.getTask(task.id)!;
-      expect(released.status).toBe('available');
-      expect(released.claimed_by).toBeNull();
+      store.removeAgent('a1');
+
+      expect(store.getTask(t1.id)!.status).toBe('available');
+      expect(store.getTask(t1.id)!.claimed_by).toBeNull();
+      expect(store.getTask(t2.id)!.status).toBe('available');
+      expect(store.getTask(t2.id)!.claimed_by).toBeNull();
     });
 
-    it('returns false for removing nonexistent agent', () => {
+    it('does not release tasks in review or done', () => {
+      store.registerAgent({ agent_id: 'a1' });
+      const task = store.createTask({ title: 'in review' });
+      store.claimTask(task.id, 'a1');
+      store.updateTaskStatus(task.id, 'working');
+      store.setTaskResult(task.id, { result_type: 'text', result_data: 'x', summary: null });
+      // task is now in 'review' status
+
+      store.removeAgent('a1');
+
+      expect(store.getTask(task.id)!.status).toBe('review');
+    });
+
+    it('returns false for non-existent agent', () => {
       expect(store.removeAgent('nope')).toBe(false);
     });
   });

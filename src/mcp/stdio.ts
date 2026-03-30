@@ -7,7 +7,7 @@ import { EventBus } from '../events/event-bus.js';
 import { createMcpServer } from './server.js';
 
 async function main() {
-  const dbPath = process.env.CONDUCTOR_DB ?? 'conductor.db';
+  const dbPath = process.env.RIFF_DB ?? 'riff.db';
   const store = new Store(dbPath);
   const eventBus = new EventBus();
   const taskService = new TaskService(store, eventBus);
@@ -27,6 +27,6 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error('conductor mcp server failed:', err);
+  console.error('riff mcp server failed:', err);
   process.exit(1);
 });

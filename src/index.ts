@@ -9,7 +9,7 @@ export type {
   CreateTaskInput,
   RegisterAgentInput,
   TaskFilter,
-  ConductorEvent,
+  RiffEvent,
   EventType,
 } from './types.js';
 

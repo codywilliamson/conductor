@@ -1,12 +1,12 @@
-import type { ConductorEvent, EventType } from '../types.js';
+import type { RiffEvent, EventType } from '../types.js';
 
-type EventListener = (event: ConductorEvent) => void;
+type EventListener = (event: RiffEvent) => void;
 
 export class EventBus {
   private listeners = new Map<string, Set<EventListener>>();
 
   emit(type: EventType, data: Record<string, unknown> = {}): void {
-    const event: ConductorEvent = {
+    const event: RiffEvent = {
       type,
       timestamp: new Date().toISOString(),
       data,

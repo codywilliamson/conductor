@@ -15,7 +15,7 @@ interface Manifest {
 }
 
 /**
- * Parse a conductor.yaml manifest and return CreateTaskInput[].
+ * Parse a riff.yaml manifest and return CreateTaskInput[].
  * Dependencies use titles as-is -- the caller resolves them to IDs after creation.
  */
 export function parseManifest(content: string): { project: string; tasks: CreateTaskInput[] } {

@@ -8,7 +8,7 @@ import { parseManifest } from '../connectors/manifest.js';
 import type { TaskStatus, TaskPriority } from '../types.js';
 
 const DEFAULT_PORT = 7400;
-const DEFAULT_DATA_DIR = join(homedir(), '.conductor');
+const DEFAULT_DATA_DIR = join(homedir(), '.riff');
 
 function ensureDataDir(dir: string): void {
   mkdirSync(dir, { recursive: true });
@@ -16,13 +16,13 @@ function ensureDataDir(dir: string): void {
 
 function getStore(dataDir: string): Store {
   ensureDataDir(dataDir);
-  return new Store(join(dataDir, 'conductor.db'));
+  return new Store(join(dataDir, 'riff.db'));
 }
 
 const program = new Command();
 
 program
-  .name('conductor')
+  .name('riff')
   .description('Coordinate AI agents around human-defined work')
   .version('0.1.0');
 
@@ -36,12 +36,12 @@ program
     const port = parseInt(opts.port, 10);
     const dataDir: string = opts.dataDir;
     ensureDataDir(dataDir);
-    const dbPath = join(dataDir, 'conductor.db');
+    const dbPath = join(dataDir, 'riff.db');
 
     const { startServer } = await import('../api/server.js');
     await startServer(port, dbPath);
 
-    console.log(`Conductor listening on http://localhost:${port}`);
+    console.log(`Riff listening on http://localhost:${port}`);
   });
 
 // --- stop ---
@@ -49,7 +49,7 @@ program
   .command('stop')
   .description('Stop the daemon')
   .action(() => {
-    console.log('To stop Conductor, press Ctrl+C in the terminal running "conductor start".');
+    console.log('To stop Riff, press Ctrl+C in the terminal running "riff start".');
   });
 
 // --- add ---

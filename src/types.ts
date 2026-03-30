@@ -54,7 +54,7 @@ export interface TaskFilter {
   limit?: number;
 }
 
-export interface ConductorEvent {
+export interface RiffEvent {
   type: EventType;
   timestamp: string;
   data: Record<string, unknown>;

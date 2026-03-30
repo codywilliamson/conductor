@@ -1,4 +1,4 @@
-# Conductor
+# Riff
 
 A lightweight daemon that coordinates AI agents around human-defined tasks.
 
@@ -6,25 +6,25 @@ A lightweight daemon that coordinates AI agents around human-defined tasks.
 
 ```bash
 pnpm install && pnpm build        # build from source
-conductor start                    # start the daemon on :7400
-conductor add "Refactor auth module" -p 1  # create a task
-conductor add --from conductor.yaml        # bulk import from manifest
-conductor board                    # kanban view
-conductor review                   # see tasks awaiting approval
-conductor approve <task_id>        # approve a completed task
+riff start                    # start the daemon on :7400
+riff add "Refactor auth module" -p 1  # create a task
+riff add --from riff.yaml        # bulk import from manifest
+riff board                    # kanban view
+riff review                   # see tasks awaiting approval
+riff approve <task_id>        # approve a completed task
 ```
 
 ## Architecture
 
 ```
- Upstream Sources               Conductor Daemon              Downstream Agents
+ Upstream Sources               Riff Daemon              Downstream Agents
  ──────────────────     ────────────────────────────     ──────────────────────────
                         ┌──────────────────────────┐
-  CLI (conductor add) ──┤                          ├──  Claude Code (MCP stdio)
+  CLI (riff add) ──┤                          ├──  Claude Code (MCP stdio)
                         │   SQLite   ←→  Services  │
   REST / Webhooks ──────┤                          ├──  Cursor / Agents (REST)
                         │   EventBus ←→  Hono API  │
-  conductor.yaml ───────┤                          ├──  CI / Scripts (REST)
+  riff.yaml ───────┤                          ├──  CI / Scripts (REST)
                         └──────────────────────────┘
 ```
 
@@ -73,16 +73,16 @@ Agents register with an `agent_id`, optional `runtime` label, `capabilities` lis
 
 | Command | Description |
 |---|---|
-| `conductor start` | Start the HTTP daemon (default port 7400) |
-| `conductor add <title>` | Create a task |
-| `conductor add --from <file>` | Bulk import from YAML manifest |
-| `conductor list [-s status]` | List tasks, optionally filtered |
-| `conductor board` | Kanban board view |
-| `conductor review` | Show tasks in review |
-| `conductor approve <task_id>` | Approve a reviewed task |
-| `conductor feedback <id> <msg>` | Send feedback (moves task back to working) |
-| `conductor agents` | List connected agents |
-| `conductor kick <agent_id>` | Disconnect an agent |
+| `riff start` | Start the HTTP daemon (default port 7400) |
+| `riff add <title>` | Create a task |
+| `riff add --from <file>` | Bulk import from YAML manifest |
+| `riff list [-s status]` | List tasks, optionally filtered |
+| `riff board` | Kanban board view |
+| `riff review` | Show tasks in review |
+| `riff approve <task_id>` | Approve a reviewed task |
+| `riff feedback <id> <msg>` | Send feedback (moves task back to working) |
+| `riff agents` | List connected agents |
+| `riff kick <agent_id>` | Disconnect an agent |
 
 ### REST API
 
@@ -111,16 +111,16 @@ Exposed via stdio transport. Tools available to MCP clients:
 
 | Tool | Description |
 |---|---|
-| `conductor_register` | Register an agent session |
-| `conductor_list_tasks` | List tasks (filterable by status, priority, scope) |
-| `conductor_claim_task` | Atomically claim a task |
-| `conductor_update_status` | Push a status transition |
-| `conductor_submit_result` | Submit work product |
-| `conductor_get_feedback` | Check for human review feedback |
+| `riff_register` | Register an agent session |
+| `riff_list_tasks` | List tasks (filterable by status, priority, scope) |
+| `riff_claim_task` | Atomically claim a task |
+| `riff_update_status` | Push a status transition |
+| `riff_submit_result` | Submit work product |
+| `riff_get_feedback` | Check for human review feedback |
 
 ## Manifest File
 
-Bulk-import tasks from a `conductor.yaml`:
+Bulk-import tasks from a `riff.yaml`:
 
 ```yaml
 project: my-project
@@ -142,23 +142,23 @@ Dependencies reference other tasks by title and are resolved to IDs on import.
 
 ## Configuration
 
-Add Conductor as an MCP server in your Claude Code config (or any MCP-compatible client):
+Add Riff as an MCP server in your Claude Code config (or any MCP-compatible client):
 
 ```json
 {
   "mcpServers": {
-    "conductor": {
+    "riff": {
       "command": "node",
       "args": ["dist/mcp/stdio.js"],
       "env": {
-        "CONDUCTOR_DB": "~/.conductor/conductor.db"
+        "RIFF_DB": "~/.conductor/riff.db"
       }
     }
   }
 }
 ```
 
-The `CONDUCTOR_DB` env var controls the database path (defaults to `conductor.db` in the working directory).
+The `RIFF_DB` env var controls the database path (defaults to `riff.db` in the working directory).
 
 ## License
 
