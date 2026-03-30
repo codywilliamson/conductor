@@ -182,6 +182,16 @@ describe('API routes', () => {
       expect(body.status).toBe('review');
       expect(body.result.result_type).toBe('text');
     });
+
+    it('returns 409 when task is not working', async () => {
+      const createRes = await req('POST', '/tasks', { title: 'A' });
+      const { id } = await createRes.json();
+      const res = await req('POST', `/tasks/${id}/result`, {
+        result_type: 'text',
+        result_data: 'nope',
+      });
+      expect(res.status).toBe(409);
+    });
   });
 
   describe('feedback endpoints', () => {
@@ -225,6 +235,13 @@ describe('API routes', () => {
       const body = await res.json();
       expect(body.status).toBe('done');
     });
+
+    it('returns 409 when task is not in review', async () => {
+      const createRes = await req('POST', '/tasks', { title: 'A' });
+      const { id } = await createRes.json();
+      const res = await req('POST', `/tasks/${id}/approve`);
+      expect(res.status).toBe(409);
+    });
   });
 
   describe('POST /hooks/ingest', () => {
@@ -245,6 +262,59 @@ describe('API routes', () => {
       expect(res.status).toBe(201);
       const body = await res.json();
       expect(body.title).toBe('Webhook: deploy');
+    });
+  });
+
+  // --- full lifecycle ---
+
+  describe('full lifecycle', () => {
+    it('create -> claim -> working -> submit result -> approve', async () => {
+      await req('POST', '/agents', { agent_id: 'bot-1', runtime: 'claude' });
+
+      // create
+      const createRes = await req('POST', '/tasks', {
+        title: 'Implement feature X',
+        description: 'Build the thing',
+        priority: 1,
+      });
+      expect(createRes.status).toBe(201);
+      const task = await createRes.json();
+      expect(task.status).toBe('available');
+
+      // claim
+      const claimRes = await req('POST', `/tasks/${task.id}/claim`, { agent_id: 'bot-1' });
+      expect(claimRes.status).toBe(200);
+      const claimed = await claimRes.json();
+      expect(claimed.status).toBe('claimed');
+      expect(claimed.claimed_by).toBe('bot-1');
+
+      // working
+      const workingRes = await req('PATCH', `/tasks/${task.id}/status`, { status: 'working' });
+      expect(workingRes.status).toBe(200);
+      expect((await workingRes.json()).status).toBe('working');
+
+      // submit result
+      const resultRes = await req('POST', `/tasks/${task.id}/result`, {
+        result_type: 'diff',
+        result_data: '--- a/foo\n+++ b/foo',
+        summary: 'implemented feature X',
+      });
+      expect(resultRes.status).toBe(200);
+      const reviewed = await resultRes.json();
+      expect(reviewed.status).toBe('review');
+      expect(reviewed.result.result_type).toBe('diff');
+
+      // approve
+      const approveRes = await req('POST', `/tasks/${task.id}/approve`);
+      expect(approveRes.status).toBe(200);
+      const done = await approveRes.json();
+      expect(done.status).toBe('done');
+
+      // verify final state
+      const getRes = await req('GET', `/tasks/${task.id}`);
+      const final = await getRes.json();
+      expect(final.status).toBe('done');
+      expect(final.result.summary).toBe('implemented feature X');
     });
   });
 });

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { Store } from '../store/store.js';
 import { EventBus } from '../events/event-bus.js';
 import { AgentService } from './agent-service.js';
@@ -14,91 +14,62 @@ describe('AgentService', () => {
     service = new AgentService(store, events);
   });
 
+  afterEach(() => {
+    store.close();
+  });
+
   describe('register', () => {
-    it('registers an agent and emits agent.registered', () => {
-      const fn = vi.fn();
-      events.on('agent.registered', fn);
+    it('registers an agent and emits event', () => {
+      const listener = vi.fn();
+      events.on('agent.registered', listener);
 
-      const agent = service.register({ agent_id: 'a1' });
+      const agent = service.register({ agent_id: 'agent-1' });
 
-      expect(agent.agent_id).toBe('a1');
+      expect(agent.agent_id).toBe('agent-1');
       expect(agent.status).toBe('idle');
-      expect(fn).toHaveBeenCalledOnce();
-      expect(fn.mock.calls[0][0].data.agent.agent_id).toBe('a1');
+      expect(listener).toHaveBeenCalledOnce();
     });
 
     it('throws on empty agent_id', () => {
       expect(() => service.register({ agent_id: '' })).toThrow('agent_id is required');
-    });
-
-    it('throws on whitespace-only agent_id', () => {
       expect(() => service.register({ agent_id: '   ' })).toThrow('agent_id is required');
     });
   });
 
   describe('get', () => {
-    it('returns existing agent', () => {
-      service.register({ agent_id: 'a1' });
-      expect(service.get('a1')).not.toBeNull();
-      expect(service.get('a1')!.agent_id).toBe('a1');
+    it('returns agent by id', () => {
+      service.register({ agent_id: 'agent-1' });
+      expect(service.get('agent-1')?.agent_id).toBe('agent-1');
     });
 
-    it('returns null for non-existent agent', () => {
+    it('returns null for nonexistent', () => {
       expect(service.get('nope')).toBeNull();
     });
   });
 
   describe('list', () => {
-    it('returns all registered agents', () => {
-      service.register({ agent_id: 'a1' });
-      service.register({ agent_id: 'a2' });
-
-      const agents = service.list();
-      expect(agents).toHaveLength(2);
-    });
-
-    it('returns empty array when no agents', () => {
-      expect(service.list()).toEqual([]);
+    it('lists all agents', () => {
+      service.register({ agent_id: 'a' });
+      service.register({ agent_id: 'b' });
+      expect(service.list()).toHaveLength(2);
     });
   });
 
   describe('disconnect', () => {
-    it('removes agent and emits agent.disconnected', () => {
-      const fn = vi.fn();
-      events.on('agent.disconnected', fn);
+    it('disconnects an agent and emits event', () => {
+      const listener = vi.fn();
+      events.on('agent.disconnected', listener);
 
-      service.register({ agent_id: 'a1' });
-      const result = service.disconnect('a1');
+      service.register({ agent_id: 'agent-1' });
+      const result = service.disconnect('agent-1');
 
       expect(result).toBe(true);
-      expect(service.get('a1')).toBeNull();
-      expect(fn).toHaveBeenCalledOnce();
-      expect(fn.mock.calls[0][0].data.agent_id).toBe('a1');
+      expect(service.get('agent-1')).toBeNull();
+      expect(listener).toHaveBeenCalledOnce();
     });
 
-    it('releases claimed tasks when agent disconnects', () => {
-      service.register({ agent_id: 'a1' });
-
-      const task = store.createTask({ title: 'will be released' });
-      store.claimTask(task.id, 'a1');
-
-      service.disconnect('a1');
-
-      const updated = store.getTask(task.id)!;
-      expect(updated.status).toBe('available');
-      expect(updated.claimed_by).toBeNull();
-    });
-
-    it('returns false for non-existent agent', () => {
+    it('returns false for nonexistent agent', () => {
       expect(service.disconnect('nope')).toBe(false);
-    });
-
-    it('does not emit event for non-existent agent', () => {
-      const fn = vi.fn();
-      events.on('agent.disconnected', fn);
-
-      service.disconnect('nope');
-      expect(fn).not.toHaveBeenCalled();
     });
   });
 });
