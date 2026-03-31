@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { streamSSE } from 'hono/streaming';
 import type { TaskService } from '../core/task-service.js';
 import type { AgentService } from '../core/agent-service.js';
+import type { ProjectService } from '../core/project-service.js';
 import type { EventBus } from '../events/event-bus.js';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { Store } from '../store/store.js';
@@ -12,6 +13,7 @@ import type { TaskStatus, TaskPriority, ApiKeyScope, ApiKeyRecord, Task } from '
 interface Deps {
   taskService: TaskService;
   agentService: AgentService;
+  projectService: ProjectService;
   eventBus: EventBus;
   store?: Store;
   apiKeyService?: ApiKeyService;
@@ -34,6 +36,7 @@ type AppBindings = {
 function errorStatus(msg: string): ContentfulStatusCode {
   if (msg.includes('not found')) return 404;
   if (msg.includes('required')) return 400;
+  if (msg.includes('already exists')) return 409;
   if (msg.includes('invalid transition') || msg.includes('must be') || msg.includes('not available') || msg.includes('unmet dependencies')) return 409;
   return 400;
 }
@@ -82,6 +85,7 @@ function toBridgeTask(task: Task) {
 export function createApp({
   taskService,
   agentService,
+  projectService,
   eventBus,
   store,
   apiKeyService,
@@ -89,6 +93,12 @@ export function createApp({
 }: Deps) {
   const app = new Hono<AppBindings>().basePath('/api/v1');
   const bridge = store && apiKeyService && config ? { store, apiKeyService, config } : null;
+
+  const resolveProject = (c: any): string | null => {
+    const projectId = c.req.param('project_id');
+    if (!projectService.get(projectId)) return null;
+    return projectId;
+  };
 
   const recordBridgeRequest = (auth: RequestAuthContext | undefined, request: Request, statusCode: number) => {
     if (!bridge || !auth || auth.local || !auth.key) {
@@ -211,10 +221,47 @@ export function createApp({
     return c.json({ ok: true });
   }));
 
-  // --- tasks ---
+  // --- projects ---
 
-  app.get('/tasks', withScope('tasks:read', (c) => {
-    const filter: Record<string, unknown> = {};
+  app.post('/projects', withScope('admin', async (c) => {
+    try {
+      const body = await c.req.json();
+      const project = projectService.create(body);
+      return c.json(project, 201);
+    } catch (e) {
+      const msg = (e as Error).message;
+      return c.json({ error: msg }, errorStatus(msg));
+    }
+  }));
+
+  app.get('/projects', withScope('tasks:read', (c) => {
+    const includeArchived = c.req.query('include_archived') === 'true';
+    return c.json(projectService.list({ includeArchived }));
+  }));
+
+  app.get('/projects/:project_id', withScope('tasks:read', (c) => {
+    const project = projectService.get(c.req.param('project_id'));
+    if (!project) return c.json({ error: 'project not found' }, 404);
+    return c.json(project);
+  }));
+
+  app.patch('/projects/:project_id', withScope('admin', async (c) => {
+    try {
+      const body = await c.req.json();
+      const project = projectService.update(c.req.param('project_id'), body);
+      return c.json(project);
+    } catch (e) {
+      const msg = (e as Error).message;
+      return c.json({ error: msg }, errorStatus(msg));
+    }
+  }));
+
+  // --- project-scoped tasks ---
+
+  app.get('/projects/:project_id/tasks', withScope('tasks:read', (c) => {
+    const projectId = resolveProject(c);
+    if (!projectId) return c.json({ error: 'project not found' }, 404);
+    const filter: Record<string, unknown> = { project_id: projectId };
     const status = c.req.query('status');
     if (status) filter.status = status as TaskStatus;
     const priorityMax = c.req.query('priority_max');
@@ -226,10 +273,12 @@ export function createApp({
     return c.json(taskService.list(filter));
   }));
 
-  app.post('/tasks', withScope('tasks:write', async (c) => {
+  app.post('/projects/:project_id/tasks', withScope('tasks:write', async (c) => {
+    const projectId = resolveProject(c);
+    if (!projectId) return c.json({ error: 'project not found' }, 404);
     try {
       const body = await c.req.json();
-      const task = taskService.create(body);
+      const task = taskService.create({ ...body, project_id: projectId });
       return c.json(task, 201);
     } catch (e) {
       const msg = (e as Error).message;
@@ -237,13 +286,17 @@ export function createApp({
     }
   }));
 
-  app.get('/tasks/:id', withScope('tasks:read', (c) => {
+  app.get('/projects/:project_id/tasks/:id', withScope('tasks:read', (c) => {
+    const projectId = resolveProject(c);
+    if (!projectId) return c.json({ error: 'project not found' }, 404);
     const task = taskService.get(c.req.param('id'));
     if (!task) return c.json({ error: 'task not found' }, 404);
     return c.json(task);
   }));
 
-  app.post('/tasks/:id/claim', withScope('tasks:claim', async (c) => {
+  app.post('/projects/:project_id/tasks/:id/claim', withScope('tasks:claim', async (c) => {
+    const projectId = resolveProject(c);
+    if (!projectId) return c.json({ error: 'project not found' }, 404);
     try {
       const { agent_id } = await c.req.json();
       const task = taskService.claim(c.req.param('id'), agent_id);
@@ -254,7 +307,9 @@ export function createApp({
     }
   }));
 
-  app.patch('/tasks/:id/status', withScope('status:write', async (c) => {
+  app.patch('/projects/:project_id/tasks/:id/status', withScope('status:write', async (c) => {
+    const projectId = resolveProject(c);
+    if (!projectId) return c.json({ error: 'project not found' }, 404);
     try {
       const { status, message } = await c.req.json();
       const task = taskService.updateStatus(c.req.param('id'), status, message);
@@ -265,7 +320,9 @@ export function createApp({
     }
   }));
 
-  app.post('/tasks/:id/result', withScope('result:write', async (c) => {
+  app.post('/projects/:project_id/tasks/:id/result', withScope('result:write', async (c) => {
+    const projectId = resolveProject(c);
+    if (!projectId) return c.json({ error: 'project not found' }, 404);
     try {
       const { result_type, result_data, summary } = await c.req.json();
       const task = taskService.submitResult(c.req.param('id'), result_type, result_data, summary);
@@ -276,7 +333,9 @@ export function createApp({
     }
   }));
 
-  app.get('/tasks/:id/feedback', withScope('feedback:read', (c) => {
+  app.get('/projects/:project_id/tasks/:id/feedback', withScope('feedback:read', (c) => {
+    const projectId = resolveProject(c);
+    if (!projectId) return c.json({ error: 'project not found' }, 404);
     try {
       const result = taskService.getFeedback(c.req.param('id'));
       return c.json(result);
@@ -286,7 +345,9 @@ export function createApp({
     }
   }));
 
-  app.post('/tasks/:id/feedback', withScope('feedback:write', async (c) => {
+  app.post('/projects/:project_id/tasks/:id/feedback', withScope('feedback:write', async (c) => {
+    const projectId = resolveProject(c);
+    if (!projectId) return c.json({ error: 'project not found' }, 404);
     try {
       const { feedback } = await c.req.json();
       const task = taskService.giveFeedback(c.req.param('id'), feedback);
@@ -297,7 +358,9 @@ export function createApp({
     }
   }));
 
-  app.post('/tasks/:id/approve', withScope('admin', (c) => {
+  app.post('/projects/:project_id/tasks/:id/approve', withScope('admin', (c) => {
+    const projectId = resolveProject(c);
+    if (!projectId) return c.json({ error: 'project not found' }, 404);
     try {
       const task = taskService.approve(c.req.param('id'));
       return c.json(task);
@@ -310,8 +373,13 @@ export function createApp({
   // --- SSE events ---
 
   app.get('/events', withScope('events:read', (c) => {
+    const filterProjectId = c.req.query('project_id');
     return streamSSE(c, async (stream) => {
       const unsubscribe = eventBus.on('*', (event) => {
+        if (filterProjectId) {
+          const taskData = event.data.task as Record<string, unknown> | undefined;
+          if (taskData && taskData.project_id !== filterProjectId) return;
+        }
         stream.writeSSE({
           event: event.type,
           data: JSON.stringify(event),
@@ -319,21 +387,21 @@ export function createApp({
         });
       });
 
-      // keep alive until client disconnects
       stream.onAbort(() => {
         unsubscribe();
       });
 
-      // block until aborted
       await new Promise<void>((resolve) => {
         stream.onAbort(() => resolve());
       });
     });
   }));
 
-  // --- bridge hooks ---
+  // --- project-scoped bridge hooks ---
 
-  app.post('/hooks/ingest', withScope('tasks:write', async (c) => {
+  app.post('/projects/:project_id/hooks/ingest', withScope('tasks:write', async (c) => {
+    const projectId = resolveProject(c);
+    if (!projectId) return c.json({ error: 'project not found' }, 404);
     try {
       const body = await c.req.json();
       if (body.batch === true) {
@@ -350,6 +418,7 @@ export function createApp({
           context: task.context ?? {},
           dependencies: task.dependencies ?? [],
           priority: task.priority ?? 2,
+          project_id: projectId,
         })));
 
         return c.json(
@@ -371,6 +440,7 @@ export function createApp({
         context: body.context ?? {},
         dependencies: body.dependencies ?? [],
         priority: body.priority ?? 2,
+        project_id: projectId,
       });
       return c.json({ created: true, task: toBridgeTask(task) }, 201);
     } catch (e) {
@@ -379,7 +449,9 @@ export function createApp({
     }
   }));
 
-  app.post('/hooks/feedback', withScope('feedback:write', async (c) => {
+  app.post('/projects/:project_id/hooks/feedback', withScope('feedback:write', async (c) => {
+    const projectId = resolveProject(c);
+    if (!projectId) return c.json({ error: 'project not found' }, 404);
     try {
       const body = await c.req.json();
       const task = taskService.giveFeedback(body.task_id, body.feedback);
@@ -390,7 +462,9 @@ export function createApp({
     }
   }));
 
-  app.get('/hooks/status', withScope('tasks:read', (c) => {
+  app.get('/projects/:project_id/hooks/status', withScope('tasks:read', (c) => {
+    const projectId = resolveProject(c);
+    if (!projectId) return c.json({ error: 'project not found' }, 404);
     const taskId = c.req.query('task_id');
     if (taskId) {
       const task = taskService.get(taskId);
@@ -400,7 +474,7 @@ export function createApp({
       return c.json({ task });
     }
 
-    const filter: Record<string, unknown> = {};
+    const filter: Record<string, unknown> = { project_id: projectId };
     const status = c.req.query('status');
     if (status) filter.status = status as TaskStatus;
     const scope = c.req.query('scope');
