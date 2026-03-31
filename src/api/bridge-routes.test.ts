@@ -4,6 +4,7 @@ import { EventBus } from '../events/event-bus.js';
 import { TaskService } from '../core/task-service.js';
 import { AgentService } from '../core/agent-service.js';
 import { ApiKeyService } from '../bridge/api-key-service.js';
+import { ProjectService } from '../core/project-service.js';
 import { createApp } from './app.js';
 import type { RiffConfig } from '../config/config.js';
 
@@ -15,6 +16,7 @@ describe('Bridge routes', () => {
   let apiKeyService: ApiKeyService;
   let config: RiffConfig;
   let app: ReturnType<typeof createApp>;
+  let defaultProjectId: string;
 
   beforeEach(() => {
     store = new Store(':memory:');
@@ -22,6 +24,8 @@ describe('Bridge routes', () => {
     taskService = new TaskService(store, events);
     agentService = new AgentService(store, events);
     apiKeyService = new ApiKeyService(store);
+    const projectService = new ProjectService(store);
+    defaultProjectId = projectService.getByName('default')!.id;
     config = {
       port: 7400,
       store: ':memory:',
@@ -53,6 +57,7 @@ describe('Bridge routes', () => {
       store,
       apiKeyService,
       config,
+      projectService,
     });
   });
 
@@ -61,6 +66,7 @@ describe('Bridge routes', () => {
   });
 
   function rebuildApp() {
+    const projectService = new ProjectService(store);
     app = createApp({
       taskService,
       agentService,
@@ -68,6 +74,7 @@ describe('Bridge routes', () => {
       store,
       apiKeyService,
       config,
+      projectService,
     });
   }
 
@@ -109,10 +116,10 @@ describe('Bridge routes', () => {
   }
 
   it('requires bearer auth for remote requests and preserves localhost access', async () => {
-    const remote = await remoteReq('GET', '/tasks');
+    const remote = await remoteReq('GET', `/projects/${defaultProjectId}/tasks`);
     expect(remote.status).toBe(401);
 
-    const local = await localReq('GET', '/tasks');
+    const local = await localReq('GET', `/projects/${defaultProjectId}/tasks`);
     expect(local.status).toBe(200);
   });
 
@@ -122,7 +129,7 @@ describe('Bridge routes', () => {
       scopes: ['tasks:write'],
     });
 
-    const res = await remoteReq('GET', '/tasks', { token: key.plaintext });
+    const res = await remoteReq('GET', `/projects/${defaultProjectId}/tasks`, { token: key.plaintext });
     expect(res.status).toBe(403);
   });
 
@@ -132,7 +139,7 @@ describe('Bridge routes', () => {
       scopes: ['tasks:write'],
     });
 
-    const res = await remoteReq('POST', '/hooks/ingest', {
+    const res = await remoteReq('POST', `/projects/${defaultProjectId}/hooks/ingest`, {
       token: key.plaintext,
       body: {
         batch: true,
@@ -177,13 +184,13 @@ describe('Bridge routes', () => {
       scopes: ['tasks:read'],
     });
 
-    const single = await remoteReq('GET', `/hooks/status?task_id=${first.id}`, {
+    const single = await remoteReq('GET', `/projects/${defaultProjectId}/hooks/status?task_id=${first.id}`, {
       token: key.plaintext,
     });
     expect(single.status).toBe(200);
     expect((await single.json()).task.id).toBe(first.id);
 
-    const filtered = await remoteReq('GET', '/hooks/status?scope=my-app&status=available', {
+    const filtered = await remoteReq('GET', `/projects/${defaultProjectId}/hooks/status?scope=my-app&status=available`, {
       token: key.plaintext,
     });
     expect(filtered.status).toBe(200);
@@ -203,7 +210,7 @@ describe('Bridge routes', () => {
       scopes: ['feedback:write'],
     });
 
-    const feedbackRes = await remoteReq('POST', '/hooks/feedback', {
+    const feedbackRes = await remoteReq('POST', `/projects/${defaultProjectId}/hooks/feedback`, {
       token: feedbackKey.plaintext,
       body: {
         task_id: feedbackTask.id,
@@ -220,19 +227,19 @@ describe('Bridge routes', () => {
       scopes: ['tasks:claim', 'status:write', 'result:write'],
     });
 
-    const claimRes = await remoteReq('POST', `/tasks/${workerTask.id}/claim`, {
+    const claimRes = await remoteReq('POST', `/projects/${defaultProjectId}/tasks/${workerTask.id}/claim`, {
       token: workerKey.plaintext,
       body: { agent_id: 'codex-remote-01' },
     });
     expect(claimRes.status).toBe(200);
 
-    const statusRes = await remoteReq('PATCH', `/tasks/${workerTask.id}/status`, {
+    const statusRes = await remoteReq('PATCH', `/projects/${defaultProjectId}/tasks/${workerTask.id}/status`, {
       token: workerKey.plaintext,
       body: { status: 'working' },
     });
     expect(statusRes.status).toBe(200);
 
-    const resultRes = await remoteReq('POST', `/tasks/${workerTask.id}/result`, {
+    const resultRes = await remoteReq('POST', `/projects/${defaultProjectId}/tasks/${workerTask.id}/result`, {
       token: workerKey.plaintext,
       body: {
         result_type: 'text',
@@ -262,10 +269,10 @@ describe('Bridge routes', () => {
       scopes: ['tasks:read'],
     });
 
-    expect((await remoteReq('GET', '/hooks/status?status=available', { token: key.plaintext })).status).toBe(
+    expect((await remoteReq('GET', `/projects/${defaultProjectId}/hooks/status?status=available`, { token: key.plaintext })).status).toBe(
       200,
     );
-    expect((await remoteReq('GET', '/hooks/status?status=available', { token: key.plaintext })).status).toBe(
+    expect((await remoteReq('GET', `/projects/${defaultProjectId}/hooks/status?status=available`, { token: key.plaintext })).status).toBe(
       429,
     );
   });
@@ -285,7 +292,7 @@ describe('Bridge routes', () => {
       scopes: ['tasks:read'],
     });
 
-    const blocked = await remoteReq('GET', '/hooks/status?status=available', {
+    const blocked = await remoteReq('GET', `/projects/${defaultProjectId}/hooks/status?status=available`, {
       token: key.plaintext,
       ip: '198.51.100.5',
     });
@@ -298,12 +305,12 @@ describe('Bridge routes', () => {
       updated_at: new Date().toISOString(),
     });
 
-    const paused = await remoteReq('GET', '/hooks/status?status=available', {
+    const paused = await remoteReq('GET', `/projects/${defaultProjectId}/hooks/status?status=available`, {
       token: key.plaintext,
     });
     expect(paused.status).toBe(503);
 
-    const local = await localReq('GET', '/tasks');
+    const local = await localReq('GET', `/projects/${defaultProjectId}/tasks`);
     expect(local.status).toBe(200);
   });
 });
