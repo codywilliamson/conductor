@@ -2,17 +2,19 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { TaskService } from '../core/task-service.js';
 import type { AgentService } from '../core/agent-service.js';
+import type { ProjectService } from '../core/project-service.js';
 import type { EventBus } from '../events/event-bus.js';
 import type { TaskStatus, TaskPriority, ResultType } from '../types.js';
 
 export interface McpServerDeps {
   taskService: TaskService;
   agentService: AgentService;
+  projectService: ProjectService;
   eventBus: EventBus;
 }
 
 export function createMcpServer(deps: McpServerDeps): McpServer {
-  const { taskService, agentService } = deps;
+  const { taskService, agentService, projectService } = deps;
 
   const server = new McpServer({
     name: 'riff',
@@ -54,11 +56,32 @@ export function createMcpServer(deps: McpServerDeps): McpServer {
     },
   );
 
-  // riff_list_tasks - list available tasks
+  // riff_list_projects - list active projects
+  server.tool(
+    'riff_list_projects',
+    'List active projects',
+    {},
+    async () => {
+      try {
+        const projects = projectService.list();
+        return {
+          content: [{ type: 'text' as const, text: JSON.stringify({ projects }) }],
+        };
+      } catch (err) {
+        return {
+          content: [{ type: 'text' as const, text: JSON.stringify({ error: String(err) }) }],
+          isError: true,
+        };
+      }
+    },
+  );
+
+  // riff_list_tasks - list available tasks in a project
   server.tool(
     'riff_list_tasks',
-    'List available tasks',
+    'List available tasks in a project',
     {
+      project_id: z.string(),
       status: z.string().optional().default('available'),
       priority_max: z.number().optional(),
       scope: z.string().optional(),
@@ -67,6 +90,7 @@ export function createMcpServer(deps: McpServerDeps): McpServer {
     async (params) => {
       try {
         const tasks = taskService.list({
+          project_id: params.project_id,
           status: params.status as TaskStatus,
           priority_max: params.priority_max as TaskPriority | undefined,
           scope: params.scope,
@@ -89,6 +113,7 @@ export function createMcpServer(deps: McpServerDeps): McpServer {
     'riff_claim_task',
     'Atomically claim a task for an agent',
     {
+      project_id: z.string(),
       task_id: z.string(),
       agent_id: z.string(),
     },
@@ -117,6 +142,7 @@ export function createMcpServer(deps: McpServerDeps): McpServer {
     'riff_update_status',
     'Push a status transition on a task',
     {
+      project_id: z.string(),
       task_id: z.string(),
       status: z.string(),
       message: z.string().optional(),
@@ -145,6 +171,7 @@ export function createMcpServer(deps: McpServerDeps): McpServer {
     'riff_submit_result',
     'Submit work product for a task',
     {
+      project_id: z.string(),
       task_id: z.string(),
       result_type: z.string(),
       result_data: z.string(),
@@ -175,6 +202,7 @@ export function createMcpServer(deps: McpServerDeps): McpServer {
     'riff_get_feedback',
     'Check for human review feedback on a task',
     {
+      project_id: z.string(),
       task_id: z.string(),
     },
     async (params) => {
