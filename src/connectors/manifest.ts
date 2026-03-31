@@ -10,7 +10,7 @@ interface ManifestTask {
 }
 
 interface Manifest {
-  project: string;
+  project?: string;
   tasks: ManifestTask[];
 }
 
@@ -18,12 +18,8 @@ interface Manifest {
  * Parse a riff.yaml manifest and return CreateTaskInput[].
  * Dependencies use titles as-is -- the caller resolves them to IDs after creation.
  */
-export function parseManifest(content: string): { project: string; tasks: CreateTaskInput[] } {
+export function parseManifest(content: string): { project: string | null; tasks: CreateTaskInput[] } {
   const doc = parse(content) as Manifest;
-
-  if (!doc?.project) {
-    throw new Error('manifest must include a "project" field');
-  }
 
   if (!Array.isArray(doc.tasks) || doc.tasks.length === 0) {
     throw new Error('manifest must include at least one task');
@@ -44,5 +40,5 @@ export function parseManifest(content: string): { project: string; tasks: Create
     return input;
   });
 
-  return { project: doc.project, tasks };
+  return { project: doc.project ?? null, tasks };
 }

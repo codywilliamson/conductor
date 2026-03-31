@@ -31,12 +31,13 @@ tasks:
     });
   });
 
-  it('throws if project field is missing', () => {
+  it('returns null project when field is missing', () => {
     const yaml = `
 tasks:
   - title: A task
 `;
-    expect(() => parseManifest(yaml)).toThrow('manifest must include a "project" field');
+    const result = parseManifest(yaml);
+    expect(result.project).toBeNull();
   });
 
   it('throws if tasks array is missing', () => {
@@ -109,5 +110,15 @@ tasks:
 `;
     const result = parseManifest(yaml);
     expect(result.tasks[0].context).toEqual({ env: 'production', region: 'us-east-1' });
+  });
+
+  it('parses manifest without project field', () => {
+    const content = `
+tasks:
+  - title: No project
+`;
+    const result = parseManifest(content);
+    expect(result.project).toBeNull();
+    expect(result.tasks).toHaveLength(1);
   });
 });
