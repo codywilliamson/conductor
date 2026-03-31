@@ -270,6 +270,42 @@ describe('TaskService', () => {
     });
   });
 
+  describe('project scoping', () => {
+    it('create sets project_id on the task', () => {
+      const project = store.createProject({ name: 'test-proj' });
+      const task = service.create({ title: 'Scoped', project_id: project.id });
+      expect(task.project_id).toBe(project.id);
+    });
+
+    it('list filters by project_id', () => {
+      const projA = store.createProject({ name: 'a' });
+      const projB = store.createProject({ name: 'b' });
+      service.create({ title: 'Task A', project_id: projA.id });
+      service.create({ title: 'Task B', project_id: projB.id });
+
+      const tasks = service.list({ project_id: projA.id });
+      expect(tasks).toHaveLength(1);
+      expect(tasks[0].title).toBe('Task A');
+    });
+
+    it('claim validates agent scope against task project', () => {
+      const project = store.createProject({ name: 'scoped-proj' });
+      const task = service.create({ title: 'Scoped task', project_id: project.id });
+      store.registerAgent({ agent_id: 'agent-1', scope: 'other-proj' });
+
+      expect(() => service.claim(task.id, 'agent-1')).toThrow('agent scope');
+    });
+
+    it('claim allows unscoped agents to claim any project', () => {
+      const project = store.createProject({ name: 'any-proj' });
+      const task = service.create({ title: 'Any task', project_id: project.id });
+      store.registerAgent({ agent_id: 'agent-global' });
+
+      const claimed = service.claim(task.id, 'agent-global');
+      expect(claimed.status).toBe('claimed');
+    });
+  });
+
   describe('approve', () => {
     it('approves a task in review and emits task.completed', () => {
       const listener = vi.fn();

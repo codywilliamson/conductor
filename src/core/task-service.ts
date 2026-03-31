@@ -66,6 +66,18 @@ export class TaskService {
   }
 
   claim(taskId: string, agentId: string): Task {
+    // check agent scope against task's project
+    const agent = this.store.getAgent(agentId);
+    if (agent?.scope) {
+      const task = this.store.getTask(taskId);
+      if (task) {
+        const project = this.store.getProject(task.project_id);
+        if (project && agent.scope !== project.name) {
+          throw new Error(`agent scope "${agent.scope}" does not match task project "${project.name}"`);
+        }
+      }
+    }
+
     const task = this.store.claimTask(taskId, agentId);
     if (!task) {
       const existing = this.store.getTask(taskId);
