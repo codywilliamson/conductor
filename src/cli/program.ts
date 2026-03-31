@@ -123,6 +123,7 @@ export function createProgram(deps: CliDeps = {}): Command {
     .option('-s, --scope <scope>', 'scope')
     .option('-d, --description <desc>', 'description')
     .option('--from <file>', 'import tasks from a YAML manifest file')
+    .option('--project <name>', 'target project (overrides active project)')
     .option('--data-dir <dir>', 'data directory', DEFAULT_DATA_DIR)
     .action((title, opts) => {
       const store = openStore(opts.dataDir, cwd, homeDir);
@@ -131,6 +132,15 @@ export function createProgram(deps: CliDeps = {}): Command {
         if (opts.from) {
           const content = readFileSync(opts.from, 'utf-8');
           const manifest = parseManifest(content);
+          const resolvedDataDir = resolve(cwd, opts.dataDir);
+          const projectName = opts.project ?? manifest.project;
+          let projectId: string;
+          if (projectName) {
+            const project = store.getProjectByName(projectName) ?? store.createProject({ name: projectName });
+            projectId = project.id;
+          } else {
+            projectId = resolveProjectId(store, resolvedDataDir);
+          }
           const titleToId = new Map<string, string>();
 
           for (const taskInput of manifest.tasks) {
@@ -146,11 +156,12 @@ export function createProgram(deps: CliDeps = {}): Command {
             const task = store.createTask({
               ...taskInput,
               dependencies: resolvedDeps ?? taskInput.dependencies,
+              project_id: projectId,
             });
             titleToId.set(task.title, task.id);
           }
 
-          writeOut(`Imported ${manifest.tasks.length} tasks from ${manifest.project}`);
+          writeOut(`Imported ${manifest.tasks.length} tasks from ${manifest.project ?? projectName ?? 'default'}`);
           for (const [taskTitle, id] of titleToId) {
             writeOut(`  ${id} ${taskTitle}`);
           }
@@ -161,11 +172,14 @@ export function createProgram(deps: CliDeps = {}): Command {
           throw new Error('title is required (or use --from for manifest import)');
         }
 
+        const resolvedDataDir = resolve(cwd, opts.dataDir);
+        const projectId = resolveProjectId(store, resolvedDataDir, opts.project);
         const task = store.createTask({
           title,
           description: opts.description,
           priority: parseInt(opts.priority, 10) as TaskPriority,
           scope: opts.scope,
+          project_id: projectId,
         });
         writeOut(formatTask(task));
       } finally {
@@ -178,14 +192,18 @@ export function createProgram(deps: CliDeps = {}): Command {
     .description('List tasks')
     .option('-s, --status <status>', 'filter by status')
     .option('-l, --limit <n>', 'max results', '50')
+    .option('--project <name>', 'target project (overrides active project)')
     .option('--data-dir <dir>', 'data directory', DEFAULT_DATA_DIR)
     .action((opts) => {
       const store = openStore(opts.dataDir, cwd, homeDir);
 
       try {
+        const resolvedDataDir = resolve(cwd, opts.dataDir);
+        const projectId = resolveProjectId(store, resolvedDataDir, opts.project);
         const tasks = store.listTasks({
           status: opts.status as TaskStatus | undefined,
           limit: parseInt(opts.limit, 10),
+          project_id: projectId,
         });
 
         if (tasks.length === 0) {
@@ -208,11 +226,14 @@ export function createProgram(deps: CliDeps = {}): Command {
   program
     .command('board')
     .description('Pretty-print a kanban board view')
+    .option('--project <name>', 'target project (overrides active project)')
     .option('--data-dir <dir>', 'data directory', DEFAULT_DATA_DIR)
     .action((opts) => {
       const store = openStore(opts.dataDir, cwd, homeDir);
       try {
-        writeOut(formatBoard(store.listTasks({ limit: 200 })));
+        const resolvedDataDir = resolve(cwd, opts.dataDir);
+        const projectId = resolveProjectId(store, resolvedDataDir, opts.project);
+        writeOut(formatBoard(store.listTasks({ limit: 200, project_id: projectId })));
       } finally {
         store.close();
       }
@@ -221,11 +242,14 @@ export function createProgram(deps: CliDeps = {}): Command {
   program
     .command('review')
     .description('Show tasks in review status')
+    .option('--project <name>', 'target project (overrides active project)')
     .option('--data-dir <dir>', 'data directory', DEFAULT_DATA_DIR)
     .action((opts) => {
       const store = openStore(opts.dataDir, cwd, homeDir);
       try {
-        const tasks = store.listTasks({ status: 'review' });
+        const resolvedDataDir = resolve(cwd, opts.dataDir);
+        const projectId = resolveProjectId(store, resolvedDataDir, opts.project);
+        const tasks = store.listTasks({ status: 'review', project_id: projectId });
         if (tasks.length === 0) {
           writeOut('No tasks in review.');
           return;

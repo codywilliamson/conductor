@@ -119,6 +119,57 @@ describe('createProgram', () => {
     });
   });
 
+  describe('task commands with project scoping', () => {
+    it('add creates task in active project', async () => {
+      await run(['project', 'create', 'my-proj', '--data-dir', dataDir]);
+      await run(['project', 'use', 'my-proj', '--data-dir', dataDir]);
+      output = [];
+      await run(['add', 'A task', '--data-dir', dataDir]);
+      expect(output.join('\n')).toContain('A task');
+
+      const store = new Store(join(dataDir, 'riff.db'));
+      const myProj = store.getProjectByName('my-proj')!;
+      const tasks = store.listTasks({ project_id: myProj.id });
+      expect(tasks.some(t => t.title === 'A task')).toBe(true);
+      store.close();
+    });
+
+    it('add respects --project override', async () => {
+      await run(['project', 'create', 'override-proj', '--data-dir', dataDir]);
+      output = [];
+      await run(['add', 'Override task', '--project', 'override-proj', '--data-dir', dataDir]);
+
+      const store = new Store(join(dataDir, 'riff.db'));
+      const proj = store.getProjectByName('override-proj')!;
+      const tasks = store.listTasks({ project_id: proj.id });
+      expect(tasks.some(t => t.title === 'Override task')).toBe(true);
+      store.close();
+    });
+
+    it('list scopes to active project', async () => {
+      await run(['project', 'create', 'proj-x', '--data-dir', dataDir]);
+      await run(['project', 'use', 'proj-x', '--data-dir', dataDir]);
+      await run(['add', 'In proj-x', '--data-dir', dataDir]);
+
+      await run(['add', 'In default', '--project', 'default', '--data-dir', dataDir]);
+
+      output = [];
+      await run(['list', '--data-dir', dataDir]);
+      expect(output.join('\n')).toContain('In proj-x');
+      expect(output.join('\n')).not.toContain('In default');
+    });
+
+    it('board scopes to active project', async () => {
+      await run(['project', 'create', 'board-proj', '--data-dir', dataDir]);
+      await run(['project', 'use', 'board-proj', '--data-dir', dataDir]);
+      await run(['add', 'Board task', '--data-dir', dataDir]);
+
+      output = [];
+      await run(['board', '--data-dir', dataDir]);
+      expect(output.join('\n')).toContain('Board task');
+    });
+  });
+
   it('shows bridge status, logs requests, and toggles pause state', async () => {
     const store = new Store(join(dataDir, 'riff.db'));
     const apiKeys = new ApiKeyService(store, {
