@@ -81,6 +81,44 @@ describe('createProgram', () => {
     expect(output.join('\n')).toContain('Revoked key: claude-ai');
   });
 
+  describe('project commands', () => {
+    it('creates a project', async () => {
+      await run(['project', 'create', 'my-app', '--data-dir', dataDir]);
+      expect(output.join('\n')).toContain('my-app');
+    });
+
+    it('creates a project with description', async () => {
+      await run(['project', 'create', 'my-app', '-d', 'a description', '--data-dir', dataDir]);
+      expect(output.join('\n')).toContain('my-app');
+    });
+
+    it('lists projects', async () => {
+      await run(['project', 'create', 'proj-a', '--data-dir', dataDir]);
+      output = [];
+      await run(['project', 'list', '--data-dir', dataDir]);
+      expect(output.join('\n')).toContain('proj-a');
+      expect(output.join('\n')).toContain('default');
+    });
+
+    it('sets and shows active project', async () => {
+      await run(['project', 'create', 'my-app', '--data-dir', dataDir]);
+      output = [];
+      await run(['project', 'use', 'my-app', '--data-dir', dataDir]);
+      expect(output.join('\n')).toContain('my-app');
+
+      output = [];
+      await run(['project', 'which', '--data-dir', dataDir]);
+      expect(output.join('\n')).toContain('my-app');
+    });
+
+    it('archives a project', async () => {
+      await run(['project', 'create', 'old-proj', '--data-dir', dataDir]);
+      output = [];
+      await run(['project', 'archive', 'old-proj', '--data-dir', dataDir]);
+      expect(output.join('\n')).toContain('Archived');
+    });
+  });
+
   it('shows bridge status, logs requests, and toggles pause state', async () => {
     const store = new Store(join(dataDir, 'riff.db'));
     const apiKeys = new ApiKeyService(store, {

@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { Command } from 'commander';
@@ -12,6 +12,7 @@ import type { BridgeTunnel, TaskPriority, TaskStatus } from '../types.js';
 import { startServer } from '../api/server.js';
 
 const DEFAULT_DATA_DIR = join(homedir(), '.riff');
+const dim = (s: string) => `\x1b[2m${s}\x1b[0m`;
 
 type Writer = (line: string) => void;
 
@@ -492,6 +493,89 @@ export function createProgram(deps: CliDeps = {}): Command {
       }
     });
 
+  const project = program.command('project').description('Manage projects');
+
+  project
+    .command('create <name>')
+    .description('Create a new project')
+    .option('-d, --description <desc>', 'project description')
+    .option('--data-dir <dir>', 'data directory', DEFAULT_DATA_DIR)
+    .action((name, opts) => {
+      const store = openStore(opts.dataDir, cwd, homeDir);
+      try {
+        const created = store.createProject({ name, description: opts.description });
+        writeOut(`Created project: ${created.name} (${created.id})`);
+      } finally {
+        store.close();
+      }
+    });
+
+  project
+    .command('list')
+    .description('List projects')
+    .option('--all', 'include archived projects')
+    .option('--data-dir <dir>', 'data directory', DEFAULT_DATA_DIR)
+    .action((opts) => {
+      const store = openStore(opts.dataDir, cwd, homeDir);
+      try {
+        const projects = store.listProjects({ includeArchived: opts.all });
+        if (projects.length === 0) {
+          writeOut('No projects found.');
+          return;
+        }
+        const resolvedDataDir = resolve(cwd, opts.dataDir);
+        const activeProjectName = readActiveProject(resolvedDataDir);
+        for (const p of projects) {
+          const marker = p.name === activeProjectName ? ' *' : '';
+          const status = p.status === 'archived' ? ' (archived)' : '';
+          writeOut(`${p.name}${marker}${status}  ${dim(p.id)}`);
+        }
+      } finally {
+        store.close();
+      }
+    });
+
+  project
+    .command('use <name>')
+    .description('Set the active project')
+    .option('--data-dir <dir>', 'data directory', DEFAULT_DATA_DIR)
+    .action((name, opts) => {
+      const store = openStore(opts.dataDir, cwd, homeDir);
+      try {
+        const found = store.getProjectByName(name);
+        if (!found) throw new Error(`project "${name}" not found`);
+        writeActiveProject(resolve(cwd, opts.dataDir), name);
+        writeOut(`Active project: ${name}`);
+      } finally {
+        store.close();
+      }
+    });
+
+  project
+    .command('which')
+    .description('Show the current active project')
+    .option('--data-dir <dir>', 'data directory', DEFAULT_DATA_DIR)
+    .action((opts) => {
+      const name = readActiveProject(resolve(cwd, opts.dataDir)) ?? 'default';
+      writeOut(name);
+    });
+
+  project
+    .command('archive <name>')
+    .description('Archive a project')
+    .option('--data-dir <dir>', 'data directory', DEFAULT_DATA_DIR)
+    .action((name, opts) => {
+      const store = openStore(opts.dataDir, cwd, homeDir);
+      try {
+        const found = store.getProjectByName(name);
+        if (!found) throw new Error(`project "${name}" not found`);
+        store.updateProject(found.id, { status: 'archived' });
+        writeOut(`Archived project: ${name}`);
+      } finally {
+        store.close();
+      }
+    });
+
   program.exitOverride();
   program.configureOutput({
     writeErr: (line) => writeErr(line.trimEnd()),
@@ -569,4 +653,27 @@ function formatAge(timestamp: string, currentTime: Date): string {
     return `${Math.floor(diffMs / 3_600_000)}h`;
   }
   return `${Math.floor(diffMs / 86_400_000)}d`;
+}
+
+function getActiveProjectFile(resolvedDataDir: string): string {
+  return join(resolvedDataDir, 'active-project');
+}
+
+function readActiveProject(resolvedDataDir: string): string | null {
+  const file = getActiveProjectFile(resolvedDataDir);
+  if (!existsSync(file)) return null;
+  const content = readFileSync(file, 'utf-8').trim();
+  return content || null;
+}
+
+function writeActiveProject(resolvedDataDir: string, name: string): void {
+  mkdirSync(dirname(getActiveProjectFile(resolvedDataDir)), { recursive: true });
+  writeFileSync(getActiveProjectFile(resolvedDataDir), name, 'utf-8');
+}
+
+function resolveProjectId(store: Store, resolvedDataDir: string, projectOverride?: string): string {
+  const projectName = projectOverride ?? readActiveProject(resolvedDataDir) ?? 'default';
+  const project = store.getProjectByName(projectName);
+  if (!project) throw new Error(`project "${projectName}" not found`);
+  return project.id;
 }
