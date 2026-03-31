@@ -2,6 +2,7 @@ export type TaskStatus = 'available' | 'claimed' | 'working' | 'review' | 'done'
 export type TaskPriority = 0 | 1 | 2 | 3;
 export type ResultType = 'diff' | 'pr_url' | 'file' | 'text';
 export type AgentStatus = 'idle' | 'working' | 'disconnected';
+export type ProjectStatus = 'active' | 'archived';
 export type ApiKeyScope =
   | 'tasks:read'
   | 'tasks:write'
@@ -16,6 +17,7 @@ export type BridgeTunnel = 'cloudflare' | 'ngrok' | 'tailscale' | 'none';
 
 export interface Task {
   id: string;
+  project_id: string;
   title: string;
   status: TaskStatus;
   description: string | null;
@@ -46,7 +48,21 @@ export interface Agent {
   status: AgentStatus;
 }
 
+export interface Project {
+  id: string;
+  name: string;
+  description: string | null;
+  status: ProjectStatus;
+  created_at: string;
+}
+
+export interface CreateProjectInput {
+  name: string;
+  description?: string;
+}
+
 export interface CreateTaskInput {
+  project_id?: string;
   title: string;
   description?: string;
   scope?: string;
@@ -68,6 +84,7 @@ export interface TaskFilter {
   status?: TaskStatus;
   priority_max?: TaskPriority;
   scope?: string;
+  project_id?: string;
   limit?: number;
 }
 
