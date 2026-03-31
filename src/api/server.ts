@@ -4,6 +4,7 @@ import { EventBus } from '../events/event-bus.js';
 import { TaskService } from '../core/task-service.js';
 import { AgentService } from '../core/agent-service.js';
 import { ApiKeyService } from '../bridge/api-key-service.js';
+import { ProjectService } from '../core/project-service.js';
 import { createApp } from './app.js';
 import type { RiffConfig } from '../config/config.js';
 
@@ -20,10 +21,12 @@ export async function startServer(
   const taskService = new TaskService(store, eventBus);
   const agentService = new AgentService(store, eventBus);
   const apiKeyService = new ApiKeyService(store);
+  const projectService = new ProjectService(store);
 
   const app = createApp({
     taskService,
     agentService,
+    projectService,
     eventBus,
     store,
     apiKeyService,
