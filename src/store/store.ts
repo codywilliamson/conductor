@@ -22,6 +22,7 @@ import type {
 
 interface TaskRow {
   id: string;
+  project_id: string;
   title: string;
   status: TaskStatus;
   description: string | null;
@@ -237,6 +238,7 @@ export class Store {
   private rowToTask(row: TaskRow): Task {
     return {
       id: row.id,
+      project_id: row.project_id,
       title: row.title,
       status: row.status,
       description: row.description,
@@ -373,6 +375,8 @@ export class Store {
   createTask(input: CreateTaskInput, taskId?: string): Task {
     const now = new Date().toISOString();
     const id = taskId ?? `task_${ulid()}`;
+    const projectId = input.project_id ?? this.getDefaultProjectId();
+
     const stmt = this.db.prepare(`
       INSERT INTO tasks (
         id,
@@ -385,10 +389,11 @@ export class Store {
         context,
         dependencies,
         priority,
+        project_id,
         created_at,
         updated_at
       )
-      VALUES (?, ?, 'available', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, 'available', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     stmt.run(
@@ -401,6 +406,7 @@ export class Store {
       JSON.stringify(input.context ?? {}),
       JSON.stringify(input.dependencies ?? []),
       input.priority ?? 2,
+      projectId,
       now,
       now,
     );
@@ -430,6 +436,11 @@ export class Store {
     if (filter.scope) {
       conditions.push('scope = ?');
       params.push(filter.scope);
+    }
+
+    if (filter.project_id) {
+      conditions.push('project_id = ?');
+      params.push(filter.project_id);
     }
 
     const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';

@@ -420,4 +420,29 @@ describe('Store', () => {
       expect(store.removeAgent('nope')).toBe(false);
     });
   });
+
+  describe('tasks with project_id', () => {
+    it('creates a task with project_id', () => {
+      const project = store.createProject({ name: 'test-proj' });
+      const task = store.createTask({ title: 'Scoped task', project_id: project.id });
+      expect(task.project_id).toBe(project.id);
+    });
+
+    it('defaults project_id to the default project', () => {
+      const task = store.createTask({ title: 'Unscoped task' });
+      const defaultProject = store.getProjectByName('default')!;
+      expect(task.project_id).toBe(defaultProject.id);
+    });
+
+    it('filters tasks by project_id', () => {
+      const projA = store.createProject({ name: 'proj-a' });
+      const projB = store.createProject({ name: 'proj-b' });
+      store.createTask({ title: 'Task A', project_id: projA.id });
+      store.createTask({ title: 'Task B', project_id: projB.id });
+
+      const tasksA = store.listTasks({ project_id: projA.id });
+      expect(tasksA).toHaveLength(1);
+      expect(tasksA[0].title).toBe('Task A');
+    });
+  });
 });
