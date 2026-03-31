@@ -302,6 +302,83 @@ describe('Store', () => {
     });
   });
 
+  describe('projects', () => {
+    it('auto-creates default project on migration', () => {
+      const projects = store.listProjects();
+      expect(projects).toHaveLength(1);
+      expect(projects[0].name).toBe('default');
+      expect(projects[0].status).toBe('active');
+      expect(projects[0].id).toMatch(/^proj_/);
+    });
+
+    it('creates a project', () => {
+      const project = store.createProject({ name: 'my-app' });
+      expect(project.id).toMatch(/^proj_/);
+      expect(project.name).toBe('my-app');
+      expect(project.description).toBeNull();
+      expect(project.status).toBe('active');
+    });
+
+    it('creates a project with description', () => {
+      const project = store.createProject({ name: 'my-app', description: 'test project' });
+      expect(project.description).toBe('test project');
+    });
+
+    it('rejects duplicate project names', () => {
+      store.createProject({ name: 'dupe' });
+      expect(() => store.createProject({ name: 'dupe' })).toThrow();
+    });
+
+    it('gets project by id', () => {
+      const created = store.createProject({ name: 'find-me' });
+      const found = store.getProject(created.id);
+      expect(found).not.toBeNull();
+      expect(found!.name).toBe('find-me');
+    });
+
+    it('gets project by name', () => {
+      const created = store.createProject({ name: 'by-name' });
+      const found = store.getProjectByName('by-name');
+      expect(found).not.toBeNull();
+      expect(found!.id).toBe(created.id);
+    });
+
+    it('returns null for nonexistent project', () => {
+      expect(store.getProject('proj_nope')).toBeNull();
+      expect(store.getProjectByName('nope')).toBeNull();
+    });
+
+    it('lists only active projects by default', () => {
+      store.createProject({ name: 'active-one' });
+      const archived = store.createProject({ name: 'old-one' });
+      store.updateProject(archived.id, { status: 'archived' });
+
+      const active = store.listProjects();
+      expect(active.every(p => p.status === 'active')).toBe(true);
+      expect(active.some(p => p.name === 'old-one')).toBe(false);
+    });
+
+    it('lists all projects when filter includes archived', () => {
+      store.createProject({ name: 'active-one' });
+      const archived = store.createProject({ name: 'old-one' });
+      store.updateProject(archived.id, { status: 'archived' });
+
+      const all = store.listProjects({ includeArchived: true });
+      expect(all.some(p => p.name === 'old-one')).toBe(true);
+    });
+
+    it('updates project name and description', () => {
+      const project = store.createProject({ name: 'old-name' });
+      const updated = store.updateProject(project.id, { name: 'new-name', description: 'desc' });
+      expect(updated!.name).toBe('new-name');
+      expect(updated!.description).toBe('desc');
+    });
+
+    it('returns null when updating nonexistent project', () => {
+      expect(store.updateProject('proj_nope', { name: 'x' })).toBeNull();
+    });
+  });
+
   describe('removeAgent', () => {
     it('removes the agent', () => {
       store.registerAgent({ agent_id: 'a1' });

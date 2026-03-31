@@ -7,6 +7,9 @@ import type {
   TaskPriority,
   Agent,
   AgentStatus,
+  Project,
+  ProjectStatus,
+  CreateProjectInput,
   CreateTaskInput,
   RegisterAgentInput,
   TaskFilter,
@@ -63,6 +66,14 @@ interface BridgeRequestRow {
   path: string;
   ip: string;
   status_code: number;
+  created_at: string;
+}
+
+interface ProjectRow {
+  id: string;
+  name: string;
+  description: string | null;
+  status: string;
   created_at: string;
 }
 
@@ -149,6 +160,14 @@ export class Store {
       CREATE INDEX IF NOT EXISTS idx_bridge_request_log_key_time
       ON bridge_request_log(key_name, created_at);
 
+      CREATE TABLE IF NOT EXISTS projects (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL UNIQUE,
+        description TEXT,
+        status TEXT NOT NULL DEFAULT 'active',
+        created_at TEXT NOT NULL
+      );
+
       CREATE TABLE IF NOT EXISTS bridge_state (
         id INTEGER PRIMARY KEY CHECK (id = 1),
         paused INTEGER NOT NULL DEFAULT 0,
@@ -168,6 +187,9 @@ export class Store {
     this.ensureColumn('tasks', 'scope', 'TEXT');
     this.ensureColumn('tasks', 'source', 'TEXT');
     this.ensureColumn('tasks', 'source_session_id', 'TEXT');
+    this.ensureColumn('tasks', 'project_id', 'TEXT');
+    this.db.exec('CREATE INDEX IF NOT EXISTS idx_tasks_project_status ON tasks(project_id, status)');
+    this.ensureDefaultProject();
   }
 
   private ensureColumn(table: string, column: string, definition: string): void {
@@ -177,6 +199,39 @@ export class Store {
     }
 
     this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  }
+
+  private ensureDefaultProject(): void {
+    const existing = this.db
+      .prepare("SELECT id FROM projects WHERE name = 'default'")
+      .get() as { id: string } | undefined;
+    if (existing) {
+      this.db.prepare('UPDATE tasks SET project_id = ? WHERE project_id IS NULL').run(existing.id);
+      return;
+    }
+    const id = `proj_${ulid()}`;
+    const now = new Date().toISOString();
+    this.db
+      .prepare('INSERT INTO projects (id, name, status, created_at) VALUES (?, ?, ?, ?)')
+      .run(id, 'default', 'active', now);
+    this.db.prepare('UPDATE tasks SET project_id = ? WHERE project_id IS NULL').run(id);
+  }
+
+  private getDefaultProjectId(): string {
+    const row = this.db
+      .prepare("SELECT id FROM projects WHERE name = 'default'")
+      .get() as { id: string };
+    return row.id;
+  }
+
+  private rowToProject(row: ProjectRow): Project {
+    return {
+      id: row.id,
+      name: row.name,
+      description: row.description,
+      status: row.status as ProjectStatus,
+      created_at: row.created_at,
+    };
   }
 
   private rowToTask(row: TaskRow): Task {
@@ -245,6 +300,74 @@ export class Store {
       tunnel: row.tunnel as BridgeTunnel | null,
       updated_at: row.updated_at,
     };
+  }
+
+  createProject(input: CreateProjectInput): Project {
+    const id = `proj_${ulid()}`;
+    const now = new Date().toISOString();
+    this.db
+      .prepare(
+        'INSERT INTO projects (id, name, description, status, created_at) VALUES (?, ?, ?, ?, ?)',
+      )
+      .run(id, input.name, input.description ?? null, 'active', now);
+    return this.getProject(id)!;
+  }
+
+  getProject(id: string): Project | null {
+    const row = this.db.prepare('SELECT * FROM projects WHERE id = ?').get(id) as
+      | ProjectRow
+      | undefined;
+    return row ? this.rowToProject(row) : null;
+  }
+
+  getProjectByName(name: string): Project | null {
+    const row = this.db.prepare('SELECT * FROM projects WHERE name = ?').get(name) as
+      | ProjectRow
+      | undefined;
+    return row ? this.rowToProject(row) : null;
+  }
+
+  listProjects(filter: { includeArchived?: boolean } = {}): Project[] {
+    if (filter.includeArchived) {
+      const rows = this.db
+        .prepare('SELECT * FROM projects ORDER BY created_at ASC')
+        .all() as ProjectRow[];
+      return rows.map((r) => this.rowToProject(r));
+    }
+    const rows = this.db
+      .prepare("SELECT * FROM projects WHERE status = 'active' ORDER BY created_at ASC")
+      .all() as ProjectRow[];
+    return rows.map((r) => this.rowToProject(r));
+  }
+
+  updateProject(
+    id: string,
+    updates: { name?: string; description?: string; status?: ProjectStatus },
+  ): Project | null {
+    const sets: string[] = [];
+    const params: unknown[] = [];
+
+    if (updates.name !== undefined) {
+      sets.push('name = ?');
+      params.push(updates.name);
+    }
+    if (updates.description !== undefined) {
+      sets.push('description = ?');
+      params.push(updates.description);
+    }
+    if (updates.status !== undefined) {
+      sets.push('status = ?');
+      params.push(updates.status);
+    }
+
+    if (sets.length === 0) return this.getProject(id);
+
+    params.push(id);
+    const result = this.db
+      .prepare(`UPDATE projects SET ${sets.join(', ')} WHERE id = ?`)
+      .run(...params);
+    if (result.changes === 0) return null;
+    return this.getProject(id);
   }
 
   createTask(input: CreateTaskInput, taskId?: string): Task {
